@@ -149,6 +149,12 @@ fn wire_ui(ui: &SettingsWindow, tx: &Sender<Cmd>) {
         }
         ui.set_stages_dirty(true);
     });
+    ui.on_stages_revert(|| {
+        with_app(|app| {
+            app.ui.set_stages_dirty(false);
+            app.refresh();
+        })
+    });
     let weak = ui.as_weak();
     let t = tx.clone();
     ui.on_stages_apply(move || {
@@ -373,7 +379,10 @@ fn update_ui(ui: &SettingsWindow, s: &Snapshot, autostart: bool) {
     let ce = &s.config.earbuds;
     ui.set_dongle_present(e.is_some());
     ui.set_buds_connected(e.is_some_and(|e| e.connected));
-    ui.set_battery_text(e.filter(|e| e.connected).map_or("–".into(), battery_text).into());
+    let battery = e.filter(|e| e.connected).and_then(|e| e.battery);
+    let pct = |p: Option<u8>| p.map_or(-1, i32::from);
+    ui.set_battery_left(pct(battery.and_then(|b| b.left)));
+    ui.set_battery_right(pct(battery.and_then(|b| b.right)));
     let noise: Option<NoiseControl> = e.and_then(|e| e.noise_control).or(ce.noise_control);
     ui.set_anc_index(index_of(NOISE, noise));
     let eq: Option<Eq> = ce.eq;
