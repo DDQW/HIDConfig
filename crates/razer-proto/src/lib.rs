@@ -293,7 +293,7 @@ pub mod hyperspeed {
     /// echoes; the bare id is presumably the set form. The reply observed on the wire
     /// is `07 80 <left%> <right%>`.
     pub fn get_battery() -> Message {
-        Message { cmd: 0x07, sub: 0x80, data: vec![] }
+        Message { cmd: 0x07, sub: 0x80, data: vec![0, 0] }
     }
 
     #[cfg(test)]

@@ -64,6 +64,11 @@ It's unclear who issues the requests these frames answer, since Synapse is gone.
 |---|---|---|
 | 2026-10-14 | `00 07 00` (len 0, cmd 07, sub 00) via SET_FEATURE 0x02 | Accepted by the driver. No reply, no events, no visible change. This was a mistake: under the OpenRazer convention the bare id is the *set* form, so it was likely an empty "set" that the dongle ignored. |
 
+| 2026-10-14 | `00 07 80` (len 0), both buds out and connected | One reply 3 ms later: `18 9a 01 03 03`, the "both connected" frame. It was probably already queued, not an answer. No `07 80` reply within 2 s. |
+| 2026-10-14 | `02 07 80 00 00` (len 2, same shape as the captured battery reply) | No reply, no events, buffer empty afterwards. |
+
+Conclusion so far: SET_FEATURE `0x02` is accepted by the driver but doesn't produce answers. Feature `0x02` looks like an **outbound notification queue** that the dongle fills on its own (status changes, battery), not a request/response mailbox. Requests probably go through ff13 (output `0x06`, input `0x07`), which is untried.
+
 ## Next steps
 
 1. Send a **get** request copying an observed frame: battery, cmd `07`, sub `00`, response sub `80`. Send it as SET_FEATURE `0x02` with the same header and checksum, then read feature `0x02` back. If that doesn't respond, try output `0x06` on ff13.
