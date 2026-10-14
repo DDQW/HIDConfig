@@ -1,0 +1,315 @@
+import { Slider, SpinBox, ComboBox, Switch, LineEdit, Button, GroupBox, ScrollView } from "std-widgets.slint";
+
+// One row: label on the left, control on the right.
+component Row inherits HorizontalLayout {
+    in property <string> label;
+    spacing: 12px;
+    alignment: stretch;
+    Text {
+        text: label;
+        vertical-alignment: center;
+        min-width: 150px;
+        horizontal-stretch: 0;
+    }
+    @children
+}
+
+component Swatch inherits Rectangle {
+    in property <color> swatch;
+    in property <bool> selected;
+    callback clicked();
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    background: swatch;
+    border-width: selected ? 2px : 1px;
+    border-color: selected ? #ffffff : #00000060;
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component SettingsWindow inherits Window {
+    title: "openrazer-win";
+    preferred-width: 480px;
+    preferred-height: 720px;
+    min-width: 420px;
+
+    // ---- Viper ----
+    in property <bool> viper-present;
+    in property <string> viper-name: "Razer Viper";
+    in property <int> max-dpi: 16000;
+    in-out property <int> dpi: 800;
+    in-out property <int> polling-index;        // 0 = 125, 1 = 500, 2 = 1000 Hz
+    in-out property <int> brightness: 128;      // 0..255
+    in-out property <int> logo-effect-index;    // off, static, breathing, spectrum
+    in-out property <string> logo-color: "44d62c";
+
+    callback dpi-changed(int);
+    callback polling-changed(int);
+    callback brightness-changed(int);
+    callback logo-changed(int, string);
+
+    // ---- Earbuds ----
+    in property <bool> dongle-present;
+    in property <bool> buds-connected;
+    in property <string> battery-text: "–";
+    in-out property <int> anc-index;            // off, anc, ambient; -1 unknown
+    in-out property <int> eq-index: -1;         // game, music, movie, flat; -1 not set
+    in-out property <int> timeout-index: -1;    // off, 5, 15, 30, 45, 60 min
+    in-out property <bool> mic-on: true;
+    in-out property <bool> reduce-calls;
+    in-out property <bool> dnd;
+    in-out property <bool> auto-pause;
+    in-out property <bool> gestures;
+    in-out property <bool> prompts;
+    // Settings the devices can't report, still unknown until set here once.
+    in property <bool> auto-pause-known;
+    in property <bool> gestures-known;
+    in property <bool> prompts-known;
+
+    callback anc-changed(int);
+    callback eq-changed(int);
+    callback timeout-changed(int);
+    callback mic-changed(bool);
+    callback toggle-changed(string, bool);
+
+    // ---- App ----
+    in property <string> config-path;
+    in property <string> last-event;
+    in-out property <bool> autostart;
+    callback autostart-changed(bool);
+    callback open-config();
+
+    // Controls that hold their own value once the user touches them: keep them in
+    // sync when the value changes from elsewhere (tray menu, config file).
+    changed dpi => {
+        dpi-slider.value = root.dpi;
+        dpi-spin.value = root.dpi;
+    }
+    changed brightness => { brightness-slider.value = root.brightness; }
+    changed logo-color => { color-edit.text = root.logo-color; }
+
+    ScrollView {
+        VerticalLayout {
+            padding: 16px;
+            spacing: 14px;
+
+            GroupBox {
+                title: viper-present ? viper-name : viper-name + " (not connected)";
+                enabled: viper-present;
+                VerticalLayout {
+                    spacing: 10px;
+                    Row {
+                        label: "DPI";
+                        dpi-slider := Slider {
+                            minimum: 100;
+                            maximum: root.max-dpi;
+                            value: root.dpi;
+                            step: 50;
+                            released(v) => {
+                                root.dpi = round(v / 50) * 50;
+                                root.dpi-changed(root.dpi);
+                            }
+                        }
+                        dpi-spin := SpinBox {
+                            width: 100px;
+                            minimum: 100;
+                            maximum: root.max-dpi;
+                            step-size: 50;
+                            value: root.dpi;
+                            edited(v) => {
+                                root.dpi = v;
+                                root.dpi-changed(v);
+                            }
+                        }
+                    }
+                    Row {
+                        label: "Polling rate";
+                        ComboBox {
+                            model: ["125 Hz", "500 Hz", "1000 Hz"];
+                            current-index <=> root.polling-index;
+                            selected => { root.polling-changed(self.current-index); }
+                        }
+                    }
+                    Row {
+                        label: "Logo effect";
+                        ComboBox {
+                            model: ["Off", "Static", "Breathing", "Spectrum"];
+                            current-index <=> root.logo-effect-index;
+                            selected => { root.logo-changed(self.current-index, root.logo-color); }
+                        }
+                    }
+                    Row {
+                        label: "Logo colour";
+                        HorizontalLayout {
+                            spacing: 6px;
+                            for c in [
+                                { hex: "44d62c", col: #44d62c },
+                                { hex: "ff0000", col: #ff0000 },
+                                { hex: "ff7a00", col: #ff7a00 },
+                                { hex: "ffd400", col: #ffd400 },
+                                { hex: "00c8ff", col: #00c8ff },
+                                { hex: "0040ff", col: #0040ff },
+                                { hex: "a020f0", col: #a020f0 },
+                                { hex: "ffffff", col: #ffffff },
+                            ]: Swatch {
+                                swatch: c.col;
+                                selected: root.logo-color == c.hex;
+                                clicked => {
+                                    root.logo-color = c.hex;
+                                    if (root.logo-effect-index == 0 || root.logo-effect-index == 3) {
+                                        root.logo-effect-index = 1;
+                                    }
+                                    root.logo-changed(root.logo-effect-index, c.hex);
+                                }
+                            }
+                            color-edit := LineEdit {
+                                width: 90px;
+                                text: root.logo-color;
+                                placeholder-text: "RRGGBB";
+                                accepted(t) => {
+                                    root.logo-color = t;
+                                    root.logo-changed(root.logo-effect-index, t);
+                                }
+                            }
+                        }
+                    }
+                    Row {
+                        label: "Brightness";
+                        brightness-slider := Slider {
+                            minimum: 0;
+                            maximum: 255;
+                            value: root.brightness;
+                            released(v) => {
+                                root.brightness = round(v);
+                                root.brightness-changed(root.brightness);
+                            }
+                        }
+                        Text {
+                            width: 44px;
+                            text: round(root.brightness * 100 / 255) + "%";
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                        }
+                    }
+                }
+            }
+
+            GroupBox {
+                title: !dongle-present ? "Hammerhead V3 HyperSpeed (dongle not connected)"
+                    : buds-connected ? "Hammerhead V3 HyperSpeed"
+                    : "Hammerhead V3 HyperSpeed (earbuds in case)";
+                enabled: dongle-present;
+                VerticalLayout {
+                    spacing: 10px;
+                    Row {
+                        label: "Battery";
+                        Text { text: root.battery-text; vertical-alignment: center; }
+                    }
+                    Row {
+                        label: "Noise control";
+                        ComboBox {
+                            model: ["Off", "ANC", "Ambient"];
+                            current-index <=> root.anc-index;
+                            selected => { root.anc-changed(self.current-index); }
+                        }
+                    }
+                    Row {
+                        label: "Reduce ANC on BT calls";
+                        Switch {
+                            checked <=> root.reduce-calls;
+                            toggled => { root.toggle-changed("reduce-calls", self.checked); }
+                        }
+                    }
+                    Row {
+                        label: "EQ preset";
+                        ComboBox {
+                            model: ["Game", "Music", "Movie", "Flat"];
+                            current-index <=> root.eq-index;
+                            selected => { root.eq-changed(self.current-index); }
+                        }
+                    }
+                    Row {
+                        label: "Microphone";
+                        Switch {
+                            checked <=> root.mic-on;
+                            toggled => { root.mic-changed(self.checked); }
+                        }
+                    }
+                    Row {
+                        label: "Do not disturb (gaming)";
+                        Switch {
+                            checked <=> root.dnd;
+                            toggled => { root.toggle-changed("dnd", self.checked); }
+                        }
+                    }
+                    Row {
+                        label: root.auto-pause-known ? "Auto-pause" : "Auto-pause (unknown)";
+                        Switch {
+                            checked <=> root.auto-pause;
+                            toggled => { root.toggle-changed("auto-pause", self.checked); }
+                        }
+                    }
+                    Row {
+                        label: root.gestures-known ? "Touch gestures" : "Touch gestures (unknown)";
+                        Switch {
+                            checked <=> root.gestures;
+                            toggled => { root.toggle-changed("gestures", self.checked); }
+                        }
+                    }
+                    Row {
+                        label: root.prompts-known ? "Voice prompts" : "Voice prompts (unknown)";
+                        Switch {
+                            checked <=> root.prompts;
+                            toggled => { root.toggle-changed("prompts", self.checked); }
+                        }
+                    }
+                    Row {
+                        label: "Power saving";
+                        ComboBox {
+                            model: ["Off", "5 min", "15 min", "30 min", "45 min", "60 min"];
+                            current-index <=> root.timeout-index;
+                            selected => { root.timeout-changed(self.current-index); }
+                        }
+                    }
+                }
+            }
+
+            GroupBox {
+                title: "App";
+                VerticalLayout {
+                    spacing: 10px;
+                    Row {
+                        label: "Start with Windows";
+                        Switch {
+                            checked <=> root.autostart;
+                            toggled => { root.autostart-changed(self.checked); }
+                        }
+                    }
+                    Row {
+                        label: "Config";
+                        Text {
+                            text: root.config-path;
+                            wrap: word-wrap;
+                            vertical-alignment: center;
+                            font-size: 11px;
+                        }
+                        Button {
+                            text: "Open";
+                            horizontal-stretch: 0;
+                            clicked => { root.open-config(); }
+                        }
+                    }
+                    Text {
+                        text: root.last-event;
+                        wrap: word-wrap;
+                        font-size: 11px;
+                        color: #888888;
+                    }
+                }
+            }
+        }
+    }
+}

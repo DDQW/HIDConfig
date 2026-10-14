@@ -8,7 +8,11 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use razer_hid::{Device, earbuds::Earbuds, hidapi::HidApi};
+use razer_hid::{
+    Device,
+    earbuds::{Battery, Earbuds},
+    hidapi::HidApi,
+};
 use razer_proto::{
     extended::Effect,
     hyperspeed::{Anc, EqPreset},
@@ -282,7 +286,31 @@ pub enum Trigger {
     ConfigChanged,
 }
 
-const TICK: Duration = Duration::from_secs(2);
+/// What the devices last reported. Refreshed on apply and every [`STATUS_EVERY`].
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Status {
+    pub viper: Option<ViperStatus>,
+    pub earbuds: Option<EarbudsStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViperStatus {
+    pub name: &'static str,
+    pub dpi: u16,
+    pub polling_hz: u16,
+    pub brightness: u8,
+}
+
+/// `None` fields could not be read (typically: buds in the case).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct EarbudsStatus {
+    pub connected: bool,
+    pub battery: Option<Battery>,
+    pub noise_control: Option<NoiseControl>,
+    pub mic_muted: Option<bool>,
+}
+
+pub const TICK: Duration = Duration::from_secs(2);
 /// A tick that took this long means the machine slept.
 const RESUME_GAP: Duration = Duration::from_secs(15);
 /// Let the wireless link come up after a plug-in or wake-up before talking to the buds.
@@ -291,105 +319,242 @@ const EARBUDS_SETTLE: Duration = Duration::from_secs(5);
 const EARBUDS_POLL: Duration = Duration::from_secs(20);
 const EARBUDS_RETRY: Duration = Duration::from_secs(10);
 const EARBUDS_ATTEMPTS: u32 = 6;
+pub const STATUS_EVERY: Duration = Duration::from_secs(30);
 
-/// Runs forever (until `keep_going` returns false), calling `on_event` for each action.
-pub fn watch(mut on_event: impl FnMut(Event), mut keep_going: impl FnMut() -> bool) -> Result<()> {
-    let mut api = HidApi::new()?;
-    let mut viper_present = false;
-    let mut dongle_present = false;
+/// Keeps devices in line with the config. Drive it by calling [`Watcher::tick`]
+/// every [`TICK`]; it re-applies on device arrival, wake-up and config edits.
+pub struct Watcher {
+    api: HidApi,
+    config: Config,
+    config_mtime: Option<SystemTime>,
+    viper_present: bool,
+    dongle_present: bool,
     // When the next earbuds attempt is due, and how many have failed so far.
-    let mut earbuds_due: Option<Instant> = None;
-    let mut earbuds_failures = 0;
-    let mut config_mtime = mtime();
-    let mut config = match Config::load() {
-        Ok(c) => c,
-        Err(e) => {
+    earbuds_due: Option<Instant>,
+    earbuds_failures: u32,
+    last_tick: Instant,
+    status: Status,
+    status_due: Instant,
+}
+
+impl Watcher {
+    pub fn new(on_event: &mut dyn FnMut(Event)) -> Result<Self> {
+        let config = Config::load().unwrap_or_else(|e| {
             on_event(Event::ConfigError(format!("{e:#}")));
             Config::default()
-        }
-    };
-    let mut last_tick = Instant::now();
+        });
+        Ok(Watcher {
+            api: HidApi::new()?,
+            config,
+            config_mtime: mtime(),
+            viper_present: false,
+            dongle_present: false,
+            earbuds_due: None,
+            earbuds_failures: 0,
+            last_tick: Instant::now(),
+            status: Status::default(),
+            status_due: Instant::now(),
+        })
+    }
 
-    while keep_going() {
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    pub fn status(&self) -> &Status {
+        &self.status
+    }
+
+    /// Edits the config, saves it, and applies the sections that changed right away.
+    pub fn update_config(
+        &mut self,
+        edit: impl FnOnce(&mut Config),
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<()> {
+        let mut new = self.config.clone();
+        edit(&mut new);
+        if new == self.config {
+            return Ok(());
+        }
+        new.save()?;
+        self.config_mtime = mtime();
+        let old = std::mem::replace(&mut self.config, new);
+        self.apply_changed(&old, on_event);
+        Ok(())
+    }
+
+    /// Mic mute is a live toggle, not a saved setting.
+    pub fn set_mic_muted(&mut self, muted: bool) -> Result<()> {
+        let e = Earbuds::open(&self.api)?.context("earbuds dongle not connected")?;
+        e.set_mic_muted(muted)?;
+        if let Some(s) = &mut self.status.earbuds {
+            s.mic_muted = Some(muted);
+        }
+        Ok(())
+    }
+
+    /// Forces a status refresh on the next tick.
+    pub fn refresh_status_soon(&mut self) {
+        self.status_due = Instant::now();
+    }
+
+    fn apply_changed(&mut self, old: &Config, on_event: &mut dyn FnMut(Event)) {
+        if old.viper != self.config.viper {
+            self.apply_viper_now(on_event);
+        }
+        if old.earbuds != self.config.earbuds {
+            // Immediate attempt; failures fall back to the retry schedule.
+            self.earbuds_due = Some(Instant::now());
+            self.earbuds_failures = 0;
+            self.try_earbuds(on_event);
+        }
+        self.status_due = Instant::now();
+    }
+
+    fn apply_viper_now(&mut self, on_event: &mut dyn FnMut(Event)) {
+        if self.config.viper == Viper::default() {
+            return;
+        }
+        for d in razer_hid::open_all(&self.api).into_iter().flatten() {
+            on_event(match apply_viper(&d, &self.config.viper) {
+                Ok(()) => Event::Applied(Target::Viper),
+                Err(e) => Event::Failed(Target::Viper, format!("{e:#}")),
+            });
+        }
+    }
+
+    fn try_earbuds(&mut self, on_event: &mut dyn FnMut(Event)) {
+        let Some(due) = self.earbuds_due else { return };
+        if Instant::now() < due {
+            return;
+        }
+        let Ok(Some(e)) = Earbuds::open(&self.api) else {
+            self.earbuds_due = None;
+            return;
+        };
+        if self.config.earbuds == EarbudsCfg::default() {
+            self.earbuds_due = None;
+            return;
+        }
+        // Cheap probe first so buds in the case cost one timeout, not one per setting.
+        if !connected(&e) {
+            on_event(Event::EarbudsWaiting);
+            self.earbuds_due = Some(Instant::now() + EARBUDS_POLL);
+            return;
+        }
+        match apply_earbuds(&e, &self.config.earbuds) {
+            Ok(()) => {
+                on_event(Event::Applied(Target::Earbuds));
+                self.earbuds_due = None;
+            }
+            Err(err) => {
+                self.earbuds_failures += 1;
+                if self.earbuds_failures < EARBUDS_ATTEMPTS {
+                    on_event(Event::Retrying(Target::Earbuds, format!("{err:#}")));
+                    self.earbuds_due = Some(Instant::now() + EARBUDS_RETRY);
+                } else {
+                    on_event(Event::Failed(Target::Earbuds, format!("{err:#}")));
+                    self.earbuds_due = None;
+                }
+            }
+        }
+    }
+
+    pub fn tick(&mut self, on_event: &mut dyn FnMut(Event)) {
         let mut trigger = None;
-        if last_tick.elapsed() > RESUME_GAP {
+        if self.last_tick.elapsed() > RESUME_GAP {
             trigger = Some(Trigger::Resume);
         }
-        last_tick = Instant::now();
+        self.last_tick = Instant::now();
 
         let m = mtime();
-        if m != config_mtime {
-            config_mtime = m;
+        if m != self.config_mtime {
+            self.config_mtime = m;
             match Config::load() {
-                Ok(c) => {
-                    if c != config {
-                        config = c;
-                        trigger = trigger.or(Some(Trigger::ConfigChanged));
+                Ok(c) if c != self.config => {
+                    let old = std::mem::replace(&mut self.config, c);
+                    if trigger.is_none() {
+                        on_event(Event::Reapplying(Trigger::ConfigChanged));
+                        self.apply_changed(&old, on_event);
                     }
                 }
+                Ok(_) => {}
                 Err(e) => on_event(Event::ConfigError(format!("{e:#}"))),
             }
         }
 
-        if let Err(e) = api.refresh_devices() {
+        if let Err(e) = self.api.refresh_devices() {
             on_event(Event::Failed(Target::Viper, format!("enumerating HID devices: {e}")));
         }
         if let Some(t) = trigger {
             on_event(Event::Reapplying(t));
         }
-        let devices: Vec<Device> = razer_hid::open_all(&api).into_iter().flatten().collect();
-        let viper_now = !devices.is_empty();
-        let earbuds = Earbuds::open(&api).ok().flatten();
-        let dongle_now = earbuds.is_some();
+        let viper_now = razer_hid::open_all(&self.api).iter().any(|d| d.is_ok());
+        let dongle_now = matches!(Earbuds::open(&self.api), Ok(Some(_)));
 
-        let viper_due = viper_now && (!viper_present || trigger.is_some());
-        if viper_due && config.viper != Viper::default() {
-            for d in &devices {
-                on_event(match apply_viper(d, &config.viper) {
-                    Ok(()) => Event::Applied(Target::Viper),
-                    Err(e) => Event::Failed(Target::Viper, format!("{e:#}")),
-                });
+        if viper_now && (!self.viper_present || trigger.is_some()) {
+            self.apply_viper_now(on_event);
+            self.status_due = Instant::now();
+        }
+        if dongle_now && (!self.dongle_present || trigger.is_some()) {
+            self.earbuds_due = Some(Instant::now() + EARBUDS_SETTLE);
+            self.earbuds_failures = 0;
+        }
+        if viper_now != self.viper_present || dongle_now != self.dongle_present {
+            self.status_due = Instant::now();
+        }
+        self.viper_present = viper_now;
+        self.dongle_present = dongle_now;
+
+        let had_due = self.earbuds_due.is_some();
+        self.try_earbuds(on_event);
+        if had_due && self.earbuds_due.is_none() {
+            self.status_due = Instant::now();
+        }
+
+        if Instant::now() >= self.status_due {
+            self.refresh_status();
+            self.status_due = Instant::now() + STATUS_EVERY;
+        }
+    }
+
+    fn refresh_status(&mut self) {
+        let viper = razer_hid::open_all(&self.api).into_iter().flatten().next().and_then(|d| {
+            Some(ViperStatus {
+                name: d.model.name,
+                dpi: d.dpi().ok()?.0,
+                polling_hz: d.polling_rate().ok()?,
+                brightness: d.logo_brightness().ok()?,
+            })
+        });
+        let earbuds = Earbuds::open(&self.api).ok().flatten().map(|e| {
+            if !connected(&e) {
+                return EarbudsStatus::default();
             }
-        }
-
-        if dongle_now && (!dongle_present || trigger.is_some()) {
-            earbuds_due = Some(Instant::now() + EARBUDS_SETTLE);
-            earbuds_failures = 0;
-        }
-        if !dongle_now || config.earbuds == EarbudsCfg::default() {
-            earbuds_due = None;
-        }
-        if let (Some(e), Some(due)) = (&earbuds, earbuds_due)
-            && Instant::now() >= due
-        {
-            // Cheap probe first so buds in the case cost one timeout, not one per setting.
-            let connected = e.connection().is_ok_and(|d| d.iter().any(|&b| b != 0));
-            if !connected {
-                on_event(Event::EarbudsWaiting);
-                earbuds_due = Some(Instant::now() + EARBUDS_POLL);
-            } else {
-                match apply_earbuds(e, &config.earbuds) {
-                    Ok(()) => {
-                        on_event(Event::Applied(Target::Earbuds));
-                        earbuds_due = None;
-                    }
-                    Err(err) => {
-                        earbuds_failures += 1;
-                        if earbuds_failures < EARBUDS_ATTEMPTS {
-                            on_event(Event::Retrying(Target::Earbuds, format!("{err:#}")));
-                            earbuds_due = Some(Instant::now() + EARBUDS_RETRY);
-                        } else {
-                            on_event(Event::Failed(Target::Earbuds, format!("{err:#}")));
-                            earbuds_due = None;
-                        }
-                    }
-                }
+            EarbudsStatus {
+                connected: true,
+                battery: e.battery().ok(),
+                noise_control: e.anc().ok().map(|(m, _)| match m {
+                    Anc::Off => NoiseControl::Off,
+                    Anc::Ambient => NoiseControl::Ambient,
+                    _ => NoiseControl::Anc,
+                }),
+                mic_muted: e.mic_muted().ok(),
             }
-        }
+        });
+        self.status = Status { viper, earbuds };
+    }
+}
 
-        viper_present = viper_now;
-        dongle_present = dongle_now;
-        drop(devices);
+fn connected(e: &Earbuds) -> bool {
+    e.connection().is_ok_and(|d| d.iter().any(|&b| b != 0))
+}
+
+/// Runs a [`Watcher`] forever (until `keep_going` returns false).
+pub fn watch(mut on_event: impl FnMut(Event), mut keep_going: impl FnMut() -> bool) -> Result<()> {
+    let mut w = Watcher::new(&mut on_event)?;
+    while keep_going() {
+        w.tick(&mut on_event);
         thread::sleep(TICK);
     }
     Ok(())
