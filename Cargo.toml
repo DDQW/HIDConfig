@@ -3,9 +3,9 @@ resolver = "3"
 members = ["apps/*", "crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "Configure Razer mice and earbuds on Windows without Synapse"
+description = "A Windows control centre for input devices, audio and displays (Razer, Xbox, DDC/CI monitors)"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/DDQW/HIDConfig"
 
