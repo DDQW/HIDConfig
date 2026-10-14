@@ -25,6 +25,8 @@ enum Cmd {
         #[arg(long)]
         guided: bool,
     },
+    /// Hammerhead V3 HyperSpeed: send one battery query to the dongle (experimental).
+    EarbudsBattery,
     /// Show firmware and current settings of supported devices.
     Info,
     /// Set DPI (one value for both axes, or X and Y).
@@ -56,6 +58,7 @@ fn main() -> Result<()> {
         Cmd::List => return list(&api),
         Cmd::Descriptor { pid } => return descriptor(&api, pid),
         Cmd::Listen { pid, secs, guided } => return listen(&api, pid, *secs, *guided),
+        Cmd::EarbudsBattery => return earbuds_battery(&api),
         _ => {}
     }
     let devices: Vec<Device> = razer_hid::open_all(&api).into_iter().collect::<Result<_>>()?;
@@ -70,7 +73,7 @@ fn main() -> Result<()> {
 
 fn run(dev: &Device, cmd: &Cmd) -> Result<()> {
     match *cmd {
-        Cmd::List | Cmd::Descriptor { .. } | Cmd::Listen { .. } => unreachable!(),
+        Cmd::List | Cmd::Descriptor { .. } | Cmd::Listen { .. } | Cmd::EarbudsBattery => unreachable!(),
         Cmd::Info => {
             let (maj, min) = dev.firmware()?;
             let (x, y) = dev.dpi()?;
@@ -237,6 +240,49 @@ fn listen(api: &HidApi, pid: &str, secs: u64, guided: bool) -> Result<()> {
     println!("\nsaved to {log_path}");
     Ok(())
 }
+fn earbuds_battery(api: &HidApi) -> Result<()> {
+    use razer_proto::hyperspeed::{self, FRAME_LEN};
+    use std::time::{Duration, Instant};
+    let info = api
+        .device_list()
+        .find(|d| d.vendor_id() == RAZER_VID && d.product_id() == 0x0a61 && d.usage_page() == 0xff14)
+        .context("Hammerhead V3 HyperSpeed dongle not found")?;
+    let h = info.open_device(api)?;
+    h.set_blocking_mode(false)?;
+    let req = hyperspeed::encode(&hyperspeed::get_battery());
+    println!("send  : {}", hex(&req[..16]));
+    h.send_feature_report(&req).context("SET_FEATURE 0x02")?;
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(2) {
+        let mut f = [0u8; FRAME_LEN];
+        f[0] = hyperspeed::REPORT_ID;
+        if h.get_feature_report(&mut f).is_ok() && f[1..].iter().any(|&b| b != 0) {
+            let t = start.elapsed().as_millis();
+            match hyperspeed::decode(&f) {
+                Some(m) => println!("{t:4}ms reply: {m:02x?}"),
+                None => println!("{t:4}ms raw  : {}", hex(&f)),
+            }
+            if let Some(m) = hyperspeed::decode(&f)
+                && m.cmd == 0x07
+                && m.sub == 0x80
+                && m.data.len() >= 2
+            {
+                let pct = |b: u8| if b == 0xff { "n/a".to_string() } else { format!("{b}%") };
+                println!("battery: left {}, right {}", pct(m.data[0]), pct(m.data[1]));
+                return Ok(());
+            }
+        }
+        let mut buf = [0u8; 64];
+        if let Ok(n) = h.read(&mut buf)
+            && n > 0
+        {
+            println!("{:4}ms event: {}", start.elapsed().as_millis(), hex(&buf[..n]));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    bail!("no battery reply within 2s")
+}
+
 fn list(api: &HidApi) -> Result<()> {
     for d in api.device_list().filter(|d| d.vendor_id() == RAZER_VID) {
         println!(

@@ -58,6 +58,12 @@ Observed frames:
 
 It's unclear who issues the requests these frames answer, since Synapse is gone. Either the dongle polls the buds itself, or something else on the system queries it.
 
+## Requests sent so far
+
+| When | Frame (from byte 6) | Result |
+|---|---|---|
+| 2026-10-14 | `00 07 00` (len 0, cmd 07, sub 00) via SET_FEATURE 0x02 | Accepted by the driver. No reply, no events, no visible change. This was a mistake: under the OpenRazer convention the bare id is the *set* form, so it was likely an empty "set" that the dongle ignored. |
+
 ## Next steps
 
 1. Send a **get** request copying an observed frame: battery, cmd `07`, sub `00`, response sub `80`. Send it as SET_FEATURE `0x02` with the same header and checksum, then read feature `0x02` back. If that doesn't respond, try output `0x06` on ff13.

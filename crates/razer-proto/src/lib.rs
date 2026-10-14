@@ -247,6 +247,88 @@ pub mod extended {
     }
 }
 
+/// Message frame used by the Hammerhead V3 HyperSpeed dongle (feature report 0x02,
+/// 63 bytes after the report id). See `docs/hammerhead-v3-hyperspeed.md`.
+pub mod hyperspeed {
+    pub const REPORT_ID: u8 = 0x02;
+    /// Report id + 63 bytes.
+    pub const FRAME_LEN: usize = 64;
+    const HEADER: [u8; 5] = [0x05, 0x60, 0x00, 0x00, 0x00];
+    const LEN: usize = 6;
+    const CRC: usize = 62;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Message {
+        pub cmd: u8,
+        pub sub: u8,
+        pub data: Vec<u8>,
+    }
+
+    pub fn checksum(f: &[u8; FRAME_LEN]) -> u8 {
+        f[LEN..CRC].iter().fold(0, |a, b| a ^ b)
+    }
+
+    pub fn encode(m: &Message) -> [u8; FRAME_LEN] {
+        let mut f = [0u8; FRAME_LEN];
+        f[0] = REPORT_ID;
+        f[1..6].copy_from_slice(&HEADER);
+        f[LEN] = m.data.len() as u8;
+        f[7] = m.cmd;
+        f[8] = m.sub;
+        f[9..9 + m.data.len()].copy_from_slice(&m.data);
+        f[CRC] = checksum(&f);
+        f
+    }
+
+    /// `None` for an empty buffer, a foreign header or a bad checksum.
+    pub fn decode(f: &[u8; FRAME_LEN]) -> Option<Message> {
+        if f[1..6] != HEADER || f[CRC] != checksum(f) {
+            return None;
+        }
+        let n = (f[LEN] as usize).min(CRC - 9);
+        Some(Message { cmd: f[7], sub: f[8], data: f[9..9 + n].to_vec() })
+    }
+
+    /// Like OpenRazer, a get request carries the `0x80 | id` sub-command its reply
+    /// echoes; the bare id is presumably the set form. The reply observed on the wire
+    /// is `07 80 <left%> <right%>`.
+    pub fn get_battery() -> Message {
+        Message { cmd: 0x07, sub: 0x80, data: vec![] }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn frame(body: &[u8], crc: u8) -> [u8; FRAME_LEN] {
+            let mut f = [0u8; FRAME_LEN];
+            f[..6].copy_from_slice(&[0x02, 0x05, 0x60, 0, 0, 0]);
+            f[6..6 + body.len()].copy_from_slice(body);
+            f[CRC] = crc;
+            f
+        }
+
+        /// Frames captured from the real dongle.
+        #[test]
+        fn captured_frames_decode() {
+            let cases: &[(&[u8], u8)] = &[
+                (&[0x02, 0x18, 0x9f, 0x00], 0x85),
+                (&[0x02, 0x18, 0x9f, 0x01], 0x84),
+                (&[0x02, 0x07, 0x80, 0x63, 0x63], 0x85),
+                (&[0x03, 0x18, 0x84, 0x01, 0x02, 0x01], 0x9d),
+                (&[0x03, 0x18, 0x9a, 0x01, 0x03, 0x03], 0x80),
+            ];
+            for (body, crc) in cases {
+                let m = decode(&frame(body, *crc)).expect("valid frame");
+                assert_eq!(encode(&m), frame(body, *crc));
+            }
+            let battery = decode(&frame(&[0x02, 0x07, 0x80, 0x63, 0x63], 0x85)).unwrap();
+            assert_eq!(battery, Message { cmd: 0x07, sub: 0x80, data: vec![0x63, 0x63] });
+            assert_eq!(decode(&[0; FRAME_LEN]), None);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
