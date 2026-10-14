@@ -96,6 +96,7 @@ fn run() -> Result<()> {
     wire_ui(&ui, &tx);
     wire_windows(&ui, &tx);
     wire_audio(&ui, &tx);
+    wire_pads(&ui);
 
     MenuEvent::set_event_handler(Some(|ev: MenuEvent| {
         let id = ev.id.0;
@@ -478,6 +479,139 @@ fn update_audio(ui: &SettingsWindow, s: &Snapshot) {
     }
 }
 
+/// Stick samples while a drift measurement runs: (start, left samples, right samples).
+type DriftRun = (std::time::Instant, Vec<(f64, f64)>, Vec<(f64, f64)>);
+
+thread_local! {
+    static DRIFT: RefCell<Option<DriftRun>> = const { RefCell::new(None) };
+}
+
+fn wire_pads(ui: &SettingsWindow) {
+    use hidconfig_win::gamepad as gp;
+    let p = ui.global::<PadState>();
+    let names: Vec<slint::SharedString> = gp::BUTTONS.iter().map(|(_, n)| (*n).into()).collect();
+    p.set_button_names(slint::ModelRc::new(slint::VecModel::from(names)));
+
+    let weak = ui.as_weak();
+    p.on_poll(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        let p = ui.global::<PadState>();
+        let Ok(r) = gp::reading(p.get_selected().max(0) as u32) else {
+            return;
+        };
+        p.set_lx(r.left.0 as f32);
+        p.set_ly(r.left.1 as f32);
+        p.set_rx(r.right.0 as f32);
+        p.set_ry(r.right.1 as f32);
+        p.set_lt(r.left_trigger as f32);
+        p.set_rt(r.right_trigger as f32);
+        let pressed: Vec<bool> = gp::BUTTONS
+            .iter()
+            .map(|(b, _)| r.buttons & b != 0)
+            .collect();
+        p.set_buttons(slint::ModelRc::new(slint::VecModel::from(pressed)));
+        DRIFT.with(|d| {
+            let mut d = d.borrow_mut();
+            let Some((start, left, right)) = d.as_mut() else {
+                return;
+            };
+            left.push(r.left);
+            right.push(r.right);
+            if start.elapsed() >= std::time::Duration::from_secs(2) {
+                let describe = |name: &str, samples: &[(f64, f64)]| {
+                    gp::drift(samples).map_or(String::new(), |dr| {
+                        format!(
+                            "{name}: rests {:.0}% off centre → dead zone {:.0}% hides it",
+                            dr.max * 100.0,
+                            dr.suggested_deadzone * 100.0
+                        )
+                    })
+                };
+                let text = format!(
+                    "{}\n{}\nMost games use about 10–25%; under 10% is healthy.",
+                    describe("Left stick", left),
+                    describe("Right stick", right)
+                );
+                p.set_drift_text(text.into());
+                p.set_measuring(false);
+                *d = None;
+            }
+        });
+    });
+    let weak = ui.as_weak();
+    p.on_measure_drift(move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.global::<PadState>().set_measuring(true);
+            ui.global::<PadState>().set_drift_text("".into());
+        }
+        DRIFT.with(|d| *d.borrow_mut() = Some((std::time::Instant::now(), vec![], vec![])));
+    });
+    let weak = ui.as_weak();
+    p.on_rumble(move |which| {
+        let Some(ui) = weak.upgrade() else { return };
+        let index = ui.global::<PadState>().get_selected().max(0) as u32;
+        let (l, r, lt, rt) = match which.as_str() {
+            "left" => (0.6, 0.0, 0.0, 0.0),
+            "right" => (0.0, 0.6, 0.0, 0.0),
+            "triggers" => (0.0, 0.0, 0.6, 0.6),
+            _ => (0.5, 0.5, 0.5, 0.5),
+        };
+        std::thread::spawn(move || {
+            if let Err(e) = gp::rumble(index, l, r, lt, rt) {
+                log(&format!("rumble: {e:#}"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let _ = gp::rumble(index, 0.0, 0.0, 0.0, 0.0);
+        });
+    });
+    p.on_adapter_power_saving_changed(|on| {
+        if let Err(e) = platform::run_elevated_ctl(&[
+            "gamepad",
+            "adapter-power-saving",
+            if on { "on" } else { "off" },
+        ]) {
+            log(&format!("adapter power saving: {e:#}"));
+        }
+        with_app(|app| {
+            let _ = app.tx.send(Cmd::RefreshStatus);
+        });
+    });
+}
+
+fn update_pads(ui: &SettingsWindow, s: &Snapshot) {
+    let p = ui.global::<PadState>();
+    let pads: Vec<PadInfo> = s
+        .status
+        .pads
+        .iter()
+        .map(|x| PadInfo {
+            index: x.index as i32,
+            name: x.name.clone().into(),
+            wireless: x.wireless,
+            battery: x.battery.map_or(-1, i32::from),
+            charging: x.charging,
+        })
+        .collect();
+    if p.get_selected() >= pads.len() as i32 {
+        p.set_selected(0);
+    }
+    if let Some(m) = sync_model(p.get_pads(), pads) {
+        p.set_pads(m);
+    }
+    p.set_adapter_present(s.status.adapter.is_some());
+    if let Some(a) = &s.status.adapter {
+        p.set_adapter_name(a.name.clone().into());
+        p.set_adapter_driver(a.driver_version.clone().into());
+        p.set_adapter_power_saving(a.power_saving_allowed.unwrap_or(false));
+    }
+    if let Some(g) = s.status.windows.as_ref().map(|w| &w.gaming) {
+        p.set_xbox_button_game_bar(g.xbox_button_opens_game_bar.unwrap_or(false));
+        p.set_game_mode(g.game_mode.unwrap_or(false));
+        p.set_game_capture(g.game_capture.unwrap_or(false));
+        p.set_background_recording(g.background_recording.unwrap_or(false));
+    }
+}
+
 fn wire_windows(ui: &SettingsWindow, tx: &Sender<Cmd>) {
     let win = ui.global::<WinState>();
     let t = tx.clone();
@@ -754,6 +888,11 @@ fn tooltip(s: &Snapshot) -> String {
         Some(_) => parts.push("Buds not connected".into()),
         None => {}
     }
+    for p in &s.status.pads {
+        if let Some(b) = p.battery {
+            parts.push(format!("Pad {b}%"));
+        }
+    }
     if parts.is_empty() {
         "HIDConfig: no devices".into()
     } else {
@@ -767,7 +906,11 @@ fn icon_state(s: &Snapshot) -> icon::State {
         .earbuds
         .as_ref()
         .and_then(|e| e.battery)
-        .is_some_and(|b| [b.left, b.right].into_iter().flatten().any(|p| p <= 20));
+        .is_some_and(|b| [b.left, b.right].into_iter().flatten().any(|p| p <= 20))
+        || s.status
+            .pads
+            .iter()
+            .any(|p| p.battery.is_some_and(|b| b <= 20) && !p.charging);
     if low {
         icon::State::LowBattery
     } else if s.status.viper.is_none() && s.status.earbuds.is_none() {
@@ -892,4 +1035,5 @@ fn update_ui(ui: &SettingsWindow, s: &Snapshot, autostart: bool) {
         .set_last_event(s.last_event.clone().into());
     update_windows(ui, s.status.windows.as_ref());
     update_audio(ui, s);
+    update_pads(ui, s);
 }

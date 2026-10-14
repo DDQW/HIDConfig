@@ -40,6 +40,11 @@ enum Cmd {
     Apply,
     /// Keep running: re-apply the config on device arrival, resume, or config edits.
     Watch,
+    /// Game controllers and the Xbox Wireless Adapter.
+    Gamepad {
+        #[command(subcommand)]
+        cmd: PadCmd,
+    },
     /// Windows audio devices and app volumes.
     Audio {
         #[command(subcommand)]
@@ -95,6 +100,7 @@ fn main() -> Result<()> {
         Cmd::Watch => return watch(),
         Cmd::Win { cmd } => return win(cmd),
         Cmd::Audio { cmd } => return audio(cmd),
+        Cmd::Gamepad { cmd } => return gamepad(cmd),
         _ => {}
     }
     let devices: Vec<Device> = hidconfig_hid::open_all(&api)
@@ -120,7 +126,8 @@ fn run(dev: &Device, cmd: &Cmd) -> Result<()> {
         | Cmd::Apply
         | Cmd::Watch
         | Cmd::Win { .. }
-        | Cmd::Audio { .. } => unreachable!(),
+        | Cmd::Audio { .. }
+        | Cmd::Gamepad { .. } => unreachable!(),
         Cmd::Info => {
             let (maj, min) = dev.firmware()?;
             let (x, y) = dev.dpi()?;
@@ -297,6 +304,121 @@ fn win(cmd: &WinCmd) -> Result<()> {
                 "acceleration curve is default: {}",
                 hidconfig_win::mouse::curve_is_default()
             );
+        }
+    }
+    Ok(())
+}
+
+#[derive(Subcommand)]
+enum PadCmd {
+    /// Connected controllers, adapter and gaming toggles.
+    List,
+    /// Print live input of a controller for a few seconds.
+    Test {
+        #[arg(default_value_t = 0)]
+        index: u32,
+        #[arg(long, default_value_t = 5)]
+        secs: u64,
+    },
+    /// Allow/forbid Windows to power down the Xbox Wireless Adapter (needs admin;
+    /// restarts the adapter).
+    AdapterPowerSaving { state: OnOff },
+    /// Rumble a controller briefly (strengths 0-100).
+    Rumble {
+        #[arg(default_value_t = 0)]
+        index: u32,
+        #[arg(long, default_value_t = 50.0)]
+        left: f64,
+        #[arg(long, default_value_t = 50.0)]
+        right: f64,
+        #[arg(long, default_value_t = 0.0)]
+        left_trigger: f64,
+        #[arg(long, default_value_t = 0.0)]
+        right_trigger: f64,
+    },
+}
+
+fn gamepad(cmd: &PadCmd) -> Result<()> {
+    use hidconfig_win::gamepad as gp;
+    use std::{thread::sleep, time::Duration};
+    // Enumeration is asynchronous: give Windows.Gaming.Input a moment.
+    let _ = gp::pads();
+    sleep(Duration::from_millis(800));
+    match cmd {
+        PadCmd::List => {
+            let pads = gp::pads()?;
+            if pads.is_empty() {
+                println!("no controllers");
+            }
+            for p in pads {
+                println!(
+                    "#{} {} ({:04x}:{:04x}) {} battery {}{}",
+                    p.index,
+                    p.name,
+                    p.vid,
+                    p.pid,
+                    if p.wireless { "wireless" } else { "wired" },
+                    p.battery.map_or("n/a".into(), |b| format!("{b}%")),
+                    if p.charging { " (charging)" } else { "" }
+                );
+            }
+            match gp::adapter() {
+                Some(a) => println!(
+                    "adapter: {} driver {} power saving allowed: {:?}
+         {}",
+                    a.name, a.driver_version, a.power_saving_allowed, a.instance_id
+                ),
+                None => println!("adapter: none"),
+            }
+            println!("{:?}", gp::read()?);
+        }
+        PadCmd::Test { index, secs } => {
+            let end = std::time::Instant::now() + Duration::from_secs(*secs);
+            while std::time::Instant::now() < end {
+                let r = gp::reading(*index)?;
+                let pressed: Vec<&str> = gp::BUTTONS
+                    .iter()
+                    .filter(|(b, _)| r.buttons & b != 0)
+                    .map(|(_, n)| *n)
+                    .collect();
+                println!(
+                    "L({:+.2},{:+.2}) R({:+.2},{:+.2}) LT {:.2} RT {:.2} {}",
+                    r.left.0,
+                    r.left.1,
+                    r.right.0,
+                    r.right.1,
+                    r.left_trigger,
+                    r.right_trigger,
+                    pressed.join(" ")
+                );
+                sleep(Duration::from_millis(250));
+            }
+        }
+        PadCmd::AdapterPowerSaving { state } => {
+            let a = gp::adapter().context("no Xbox Wireless Adapter connected")?;
+            gp::set_adapter_power_saving(&a, state.on())?;
+            println!(
+                "{}: power saving {}",
+                a.name,
+                if state.on() { "allowed" } else { "off" }
+            );
+        }
+        PadCmd::Rumble {
+            index,
+            left,
+            right,
+            left_trigger,
+            right_trigger,
+        } => {
+            gp::rumble(
+                *index,
+                left / 100.0,
+                right / 100.0,
+                left_trigger / 100.0,
+                right_trigger / 100.0,
+            )?;
+            sleep(Duration::from_millis(600));
+            gp::rumble(*index, 0.0, 0.0, 0.0, 0.0)?;
         }
     }
     Ok(())

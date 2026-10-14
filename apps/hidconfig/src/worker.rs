@@ -17,6 +17,8 @@ pub enum Cmd {
     MicOn(bool),
     /// Stop managing Windows settings and put the backed-up values back.
     WinRestore,
+    /// Re-read device status now (after an external change).
+    RefreshStatus,
     /// A live audio change (volume, mute) that isn't saved in the profile.
     Audio(Box<dyn FnOnce() -> anyhow::Result<()> + Send>),
     Quit,
@@ -98,6 +100,10 @@ fn run(rx: Receiver<Cmd>, publish: impl Fn(Snapshot)) {
                         format!("restore: {e:#}"),
                     )),
                 }
+                watcher.refresh_status_soon();
+                watcher.tick(&mut on_event);
+            }
+            Ok(Cmd::RefreshStatus) => {
                 watcher.refresh_status_soon();
                 watcher.tick(&mut on_event);
             }

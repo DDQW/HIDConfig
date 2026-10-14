@@ -85,3 +85,40 @@ pub fn open_config() -> Result<()> {
     std::process::Command::new("notepad.exe").arg(p).spawn()?;
     Ok(())
 }
+
+/// Runs `hidconfigctl.exe <args>` elevated (one UAC prompt) and waits for it.
+pub fn run_elevated_ctl(args: &[&str]) -> Result<()> {
+    use windows::{
+        Win32::{
+            Foundation::CloseHandle,
+            System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject},
+            UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW},
+            UI::WindowsAndMessaging::SW_HIDE,
+        },
+        core::{PCWSTR, w},
+    };
+    let exe = std::env::current_exe()?.with_file_name("hidconfigctl.exe");
+    anyhow::ensure!(exe.exists(), "{} not found", exe.display());
+    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let file = wide(&exe.to_string_lossy());
+    let params = wide(&args.join(" "));
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        lpVerb: w!("runas"),
+        lpFile: PCWSTR(file.as_ptr()),
+        lpParameters: PCWSTR(params.as_ptr()),
+        nShow: SW_HIDE.0,
+        ..Default::default()
+    };
+    // SAFETY: all strings outlive the call; the process handle is closed below.
+    unsafe {
+        ShellExecuteExW(&mut info)?;
+        WaitForSingleObject(info.hProcess, INFINITE);
+        let mut code = 0u32;
+        let _ = GetExitCodeProcess(info.hProcess, &mut code);
+        let _ = CloseHandle(info.hProcess);
+        anyhow::ensure!(code == 0, "hidconfigctl exited with {code}");
+    }
+    Ok(())
+}

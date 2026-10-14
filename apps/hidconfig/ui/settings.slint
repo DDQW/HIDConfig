@@ -1287,6 +1287,239 @@ component CallsCard inherits Card {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Gamepads page
+
+export struct PadInfo {
+    index: int,
+    name: string,
+    wireless: bool,
+    battery: int,       // -1 = not reported
+    charging: bool,
+}
+
+export global PadState {
+    in property <[PadInfo]> pads;
+    in-out property <int> selected;
+    // Live input of the selected controller (updated by a timer while visible).
+    in property <float> lx;
+    in property <float> ly;
+    in property <float> rx;
+    in property <float> ry;
+    in property <float> lt;
+    in property <float> rt;
+    in property <[string]> button-names;
+    in property <[bool]> buttons;
+    in property <string> drift-text;
+    in property <bool> measuring;
+    // Adapter
+    in property <bool> adapter-present;
+    in property <string> adapter-name;
+    in property <string> adapter-driver;
+    in property <bool> adapter-power-saving;
+    // Gaming toggles (current Windows values)
+    in property <bool> xbox-button-game-bar;
+    in property <bool> game-mode;
+    in property <bool> game-capture;
+    in property <bool> background-recording;
+
+    callback poll();
+    callback rumble(string /* "left" | "right" | "triggers" | "all" */);
+    callback measure-drift();
+    callback adapter-power-saving-changed(bool);
+}
+
+component StickView inherits VerticalLayout {
+    in property <string> label;
+    in property <float> sx;
+    in property <float> sy;
+    alignment: start;
+    spacing: 4px;
+    Rectangle {
+        width: 120px;
+        height: 120px;
+        border-radius: 60px;
+        border-width: 1px;
+        border-color: Palette.border;
+        background: Palette.foreground.with-alpha(0.04);
+        // Cross-hair
+        Rectangle { x: 59px; y: 8px; width: 1px; height: 104px; background: Palette.border; }
+        Rectangle { x: 8px; y: 59px; width: 104px; height: 1px; background: Palette.border; }
+        Rectangle {
+            width: 14px;
+            height: 14px;
+            border-radius: 7px;
+            background: Theme.ok;
+            x: 60px + root.sx * 53px - 7px;
+            y: 60px - root.sy * 53px - 7px;
+        }
+    }
+    Text {
+        text: root.label + "  " + round(root.sx * 100) / 100 + ", " + round(root.sy * 100) / 100;
+        color: Theme.muted;
+        font-size: 11px;
+        horizontal-alignment: center;
+    }
+}
+
+component TriggerBar inherits HorizontalLayout {
+    in property <string> label;
+    in property <float> value;
+    spacing: 8px;
+    Text { width: 24px; text: root.label; vertical-alignment: center; }
+    Rectangle {
+        height: 10px;
+        border-radius: 5px;
+        background: Palette.foreground.with-alpha(0.12);
+        Rectangle {
+            x: 0;
+            width: parent.width * root.value;
+            border-radius: 5px;
+            background: Theme.ok;
+        }
+    }
+    Text { width: 40px; text: round(root.value * 100) + "%"; horizontal-alignment: right; vertical-alignment: center; }
+}
+
+component ButtonDot inherits Rectangle {
+    in property <string> text;
+    in property <bool> on;
+    width: 52px;
+    height: 26px;
+    border-radius: 6px;
+    background: on ? Theme.ok : Palette.foreground.with-alpha(0.08);
+    Text {
+        text: root.text;
+        color: root.on ? #000000 : Palette.foreground;
+        font-size: 11px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component ControllersCard inherits Card {
+    title: "Controllers";
+    summary: PadState.pads.length + " connected";
+    for p in PadState.pads: HorizontalLayout {
+        spacing: 10px;
+        Text {
+            horizontal-stretch: 1;
+            text: p.name;
+            overflow: elide;
+            vertical-alignment: center;
+            font-weight: p.index == PadState.selected ? 600 : 400;
+        }
+        VerticalLayout {
+            alignment: center;
+            Chip { text: p.wireless ? "Wireless" : "Wired"; tint: #4aa3ff; }
+        }
+        if p.battery >= 0: BatteryBar { side: p.charging ? "⚡" : ""; percent: p.battery; }
+        if p.index != PadState.selected: Button {
+            text: "Test";
+            clicked => { PadState.selected = p.index; }
+        }
+    }
+    if PadState.pads.length == 0: Placeholder {
+        text: "No controller connected. Turn one on (wireless) or plug it in.";
+    }
+}
+
+component TesterCard inherits Card {
+    title: "Input test";
+    summary: PadState.pads.length > PadState.selected ? PadState.pads[PadState.selected].name : "";
+    HorizontalLayout {
+        alignment: center;
+        spacing: 24px;
+        StickView { label: "Left"; sx: PadState.lx; sy: PadState.ly; }
+        StickView { label: "Right"; sx: PadState.rx; sy: PadState.ry; }
+    }
+    TriggerBar { label: "LT"; value: PadState.lt; }
+    TriggerBar { label: "RT"; value: PadState.rt; }
+    // Button grid, 6 per row.
+    for row in [0, 6, 12]: HorizontalLayout {
+        alignment: center;
+        spacing: 6px;
+        for i in [0, 1, 2, 3, 4, 5]: ButtonDot {
+            visible: row + i < PadState.button-names.length;
+            text: row + i < PadState.button-names.length ? PadState.button-names[row + i] : "";
+            on: row + i < PadState.buttons.length && PadState.buttons[row + i];
+        }
+    }
+
+    Rectangle { height: 1px; background: Palette.border; }
+
+    Row {
+        label: "Stick drift";
+        hint: "Leave both sticks untouched";
+        Button {
+            text: PadState.measuring ? "Measuring…" : "Measure (2 s)";
+            enabled: !PadState.measuring;
+            clicked => { PadState.measure-drift(); }
+        }
+    }
+    if PadState.drift-text != "": Placeholder { text: PadState.drift-text; }
+    Row {
+        label: "Rumble";
+        Button { text: "Left"; clicked => { PadState.rumble("left"); } }
+        Button { text: "Right"; clicked => { PadState.rumble("right"); } }
+        Button { text: "Triggers"; clicked => { PadState.rumble("triggers"); } }
+    }
+}
+
+component AdapterCard inherits Card {
+    title: PadState.adapter-present ? PadState.adapter-name : "Xbox Wireless Adapter";
+    status: PadState.adapter-present ? "Connected" : "Not found";
+    status-tint: PadState.adapter-present ? Theme.ok : Theme.muted;
+    if PadState.adapter-present: Row {
+        label: "Driver";
+        Text { text: PadState.adapter-driver; vertical-alignment: center; }
+    }
+    if PadState.adapter-present: Row {
+        label: "USB power saving";
+        hint: PadState.adapter-power-saving ? "Can cause controller dropouts" : "Off (recommended)";
+        Switch {
+            property <bool> source: PadState.adapter-power-saving;
+            changed source => { self.checked = self.source; }
+            checked: PadState.adapter-power-saving;
+            toggled => { PadState.adapter-power-saving-changed(self.checked); }
+        }
+    }
+    if PadState.adapter-present && PadState.adapter-power-saving: Placeholder {
+        text: "Changing this asks for administrator rights and restarts the adapter.";
+        font-size: 11px;
+    }
+    if !PadState.adapter-present: Placeholder {
+        text: "Plug in the adapter; controllers paired to it show up above.";
+    }
+}
+
+component GamingCard inherits Card {
+    title: "Windows gaming";
+    WinSwitch {
+        label: "Xbox button opens Game Bar";
+        key: "gaming.xbox_button_opens_game_bar";
+        value: PadState.xbox-button-game-bar;
+    }
+    WinSwitch {
+        label: "Game Mode";
+        hint: "Prioritise the game you're playing";
+        key: "gaming.game_mode";
+        value: PadState.game-mode;
+    }
+    WinSwitch {
+        label: "Game Bar capture";
+        hint: "Screenshots and recording";
+        key: "gaming.game_capture";
+        value: PadState.game-capture;
+    }
+    WinSwitch {
+        label: "Record what happened";
+        hint: "Background recording (costs performance)";
+        key: "gaming.background_recording";
+        value: PadState.background-recording;
+    }
+}
+
 component NavTab inherits Rectangle {
     in property <string> text;
     in property <bool> active;
@@ -1320,10 +1553,17 @@ export component SettingsWindow inherits Window {
     min-height: 300px;
     background: Palette.background;
 
-    // 0 = devices, 1 = mouse, 2 = keyboard, 3 = audio
+    // 0 = devices, 1 = mouse, 2 = keyboard, 3 = audio, 4 = gamepads
     in-out property <int> page;
     // Two columns once there is room for two readable cards side by side.
     private property <bool> wide: self.width >= 1080px;
+
+    // Live controller input, only while the Gamepads page is open.
+    Timer {
+        interval: 33ms;
+        running: root.page == 4 && PadState.pads.length > 0;
+        triggered => { PadState.poll(); }
+    }
 
     VerticalLayout {
         // Navigation
@@ -1336,6 +1576,7 @@ export component SettingsWindow inherits Window {
                 NavTab { text: "Mouse"; active: root.page == 1; clicked => { root.page = 1; } }
                 NavTab { text: "Keyboard"; active: root.page == 2; clicked => { root.page = 2; } }
                 NavTab { text: "Audio"; active: root.page == 3; clicked => { root.page = 3; } }
+                NavTab { text: "Gamepads"; active: root.page == 4; clicked => { root.page = 4; } }
             }
             Rectangle {
                 y: parent.height - 1px;
@@ -1454,6 +1695,43 @@ export component SettingsWindow inherits Window {
                         InputsCard { }
                         AppsCard { }
                         CallsCard { }
+                    }
+                }
+
+                // ---- Gamepads ----
+                if root.page == 4 && root.wide: HorizontalLayout {
+                    alignment: center;
+                    padding: 20px;
+                    spacing: 16px;
+                    VerticalLayout {
+                        max-width: 640px;
+                        horizontal-stretch: 1;
+                        alignment: start;
+                        spacing: 16px;
+                        ControllersCard { }
+                        if PadState.pads.length > 0: TesterCard { }
+                    }
+                    VerticalLayout {
+                        max-width: 640px;
+                        horizontal-stretch: 1;
+                        alignment: start;
+                        spacing: 16px;
+                        AdapterCard { }
+                        GamingCard { }
+                    }
+                }
+                if root.page == 4 && !root.wide: HorizontalLayout {
+                    alignment: center;
+                    VerticalLayout {
+                        max-width: 640px;
+                        min-width: 420px;
+                        horizontal-stretch: 1;
+                        padding: 20px;
+                        spacing: 16px;
+                        ControllersCard { }
+                        if PadState.pads.length > 0: TesterCard { }
+                        AdapterCard { }
+                        GamingCard { }
                     }
                 }
 

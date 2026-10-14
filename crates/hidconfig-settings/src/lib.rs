@@ -382,6 +382,8 @@ pub struct Status {
     /// Current Windows values (not the config).
     pub windows: Option<WindowsSettings>,
     pub audio: AudioLive,
+    pub pads: Vec<hidconfig_win::gamepad::Pad>,
+    pub adapter: Option<hidconfig_win::gamepad::Adapter>,
 }
 
 /// Live audio state: device and app volumes refresh every tick, the heavier
@@ -502,6 +504,8 @@ impl Watcher {
             self.audio_details_due = Instant::now();
         }
         self.tick_audio(on_event);
+        // Cheap; keeps the controller list and batteries current.
+        self.status.pads = hidconfig_win::gamepad::pads().unwrap_or_default();
     }
 
     /// Updates the live audio state; re-applies the audio profile when a device appears.
@@ -743,6 +747,7 @@ impl Watcher {
         self.status.viper = viper;
         self.status.earbuds = earbuds;
         self.status.windows = hidconfig_win::read().ok();
+        self.status.adapter = hidconfig_win::gamepad::adapter();
     }
 }
 

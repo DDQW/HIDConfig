@@ -4,6 +4,8 @@
 //! current system values, and `apply()` that writes only the fields that are set.
 
 pub mod audio;
+mod devices;
+pub mod gamepad;
 pub mod keyboard;
 pub mod mouse;
 mod reg;
@@ -24,6 +26,7 @@ pub struct WindowsSettings {
     pub mouse: MouseSettings,
     pub keyboard: KeyboardSettings,
     pub audio: AudioSettings,
+    pub gaming: gamepad::GamingSettings,
 }
 
 impl WindowsSettings {
@@ -70,6 +73,7 @@ impl WindowsSettings {
 
 pub fn read() -> Result<WindowsSettings> {
     Ok(WindowsSettings {
+        gaming: gamepad::read()?,
         mouse: mouse::read()?,
         keyboard: keyboard::read()?,
         audio: audio::read()?,
@@ -92,6 +96,9 @@ pub fn apply(s: &WindowsSettings, backup: &Path) -> Result<()> {
     }
     if let Err(e) = audio::apply(&s.audio) {
         errors.push(format!("audio: {e:#}"));
+    }
+    if let Err(e) = gamepad::apply(&s.gaming) {
+        errors.push(format!("gaming: {e:#}"));
     }
     if errors.is_empty() {
         Ok(())
@@ -117,6 +124,9 @@ fn update_backup(path: &Path, s: &WindowsSettings) -> Result<()> {
     if saved.audio == AudioSettings::default() && s.audio != AudioSettings::default() {
         saved.audio = audio::read()?;
     }
+    if saved.gaming == Default::default() && s.gaming != Default::default() {
+        saved.gaming = gamepad::read()?;
+    }
     if saved == before && path.exists() {
         return Ok(());
     }
@@ -140,6 +150,7 @@ pub fn restore(backup: &Path) -> Result<WindowsSettings> {
     mouse::apply(&saved.mouse)?;
     keyboard::apply(&saved.keyboard)?;
     audio::apply(&saved.audio)?;
+    gamepad::apply(&saved.gaming)?;
     Ok(saved)
 }
 
