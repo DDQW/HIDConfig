@@ -165,12 +165,14 @@ pub fn apply(s: &KeyboardSettings) -> Result<()> {
             filterkeys().and_then(|mut fk| {
                 if let Some(on) = s.custom_repeat {
                     set_flag(&mut fk.dwFlags, FKF_FILTERKEYSON, on);
+                    // Repeat only: no slow keys, no bounce keys, no tray icon or clicks.
+                    // Turning it off puts the indicator/click flags back to Windows'
+                    // defaults (they only matter while FilterKeys is on).
                     if on {
-                        // Repeat only: no slow keys, no bounce keys, no tray icon or clicks.
                         fk.iWaitMSec = 0;
                         fk.iBounceMSec = 0;
-                        set_flag(&mut fk.dwFlags, FKF_INDICATOR | FKF_CLICKON, false);
                     }
+                    set_flag(&mut fk.dwFlags, FKF_INDICATOR | FKF_CLICKON, !on);
                 }
                 if let Some(ms) = s.custom_repeat_delay_ms {
                     fk.iDelayMSec = ms;
