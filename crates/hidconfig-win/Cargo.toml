@@ -1,0 +1,14 @@
+[package]
+name = "hidconfig-win"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.8"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Accessibility"] }
+windows-registry = "0.100.0"

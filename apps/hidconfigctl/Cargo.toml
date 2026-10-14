@@ -10,6 +10,7 @@ clap = { version = "4.6.7", features = ["derive"] }
 hidconfig-hid = { version = "0.1.0", path = "../../crates/hidconfig-hid" }
 hidconfig-proto = { version = "0.1.0", path = "../../crates/hidconfig-proto" }
 hidconfig-settings = { version = "0.1.0", path = "../../crates/hidconfig-settings" }
+hidconfig-win = { version = "0.1.0", path = "../../crates/hidconfig-win" }
 toml = "1.1.8"
 
 [build-dependencies]

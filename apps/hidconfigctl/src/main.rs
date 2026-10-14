@@ -40,6 +40,11 @@ enum Cmd {
     Apply,
     /// Keep running: re-apply the config on device arrival, resume, or config edits.
     Watch,
+    /// Windows mouse and keyboard settings.
+    Win {
+        #[command(subcommand)]
+        cmd: WinCmd,
+    },
     /// Set DPI (one value for both axes, or X and Y).
     Dpi { x: u16, y: Option<u16> },
     /// Set DPI stages, e.g. `stages 400 800 1600x1200 --active 2` (1-5 stages).
@@ -83,6 +88,7 @@ fn main() -> Result<()> {
         Cmd::Save => return save(&api),
         Cmd::Apply => return apply(&api),
         Cmd::Watch => return watch(),
+        Cmd::Win { cmd } => return win(cmd),
         _ => {}
     }
     let devices: Vec<Device> = hidconfig_hid::open_all(&api)
@@ -106,7 +112,8 @@ fn run(dev: &Device, cmd: &Cmd) -> Result<()> {
         | Cmd::Config
         | Cmd::Save
         | Cmd::Apply
-        | Cmd::Watch => unreachable!(),
+        | Cmd::Watch
+        | Cmd::Win { .. } => unreachable!(),
         Cmd::Info => {
             let (maj, min) = dev.firmware()?;
             let (x, y) = dev.dpi()?;
@@ -213,6 +220,96 @@ fn apply(api: &HidApi) -> Result<()> {
     if let Some(e) = hidconfig_hid::earbuds::Earbuds::open(api)? {
         hidconfig_settings::apply_earbuds(&e, &cfg.earbuds).context("earbuds")?;
         println!("Hammerhead V3 HyperSpeed: applied");
+    }
+    Ok(())
+}
+
+#[derive(Subcommand)]
+enum WinCmd {
+    /// Print current Windows values (as config TOML).
+    Show,
+    /// Apply settings now, e.g. `win set mouse.pointer_speed=10 keyboard.repeat_rate=31`.
+    Set {
+        #[arg(required = true)]
+        assignments: Vec<String>,
+        /// Also store them in config.toml so they are re-applied.
+        #[arg(long)]
+        save: bool,
+    },
+    /// Put back the values saved before HIDConfig first changed anything.
+    Restore,
+    /// Report whether the mouse acceleration curve is the Windows default.
+    Curve {
+        /// Reset it to the default (takes effect after sign-out).
+        #[arg(long)]
+        reset: bool,
+    },
+}
+
+/// `mouse.pointer_speed=10` -> TOML table entries, parsed into WindowsSettings.
+fn parse_assignments(items: &[String]) -> Result<hidconfig_win::WindowsSettings> {
+    let mut toml_text = String::new();
+    for item in items {
+        let (key, value) = item.split_once('=').context("expected section.key=value")?;
+        let (section, field) = key.split_once('.').context("expected mouse.<key> or keyboard.<key>")?;
+        let value = value.trim();
+        let is_literal = value.parse::<f64>().is_ok() || value == "true" || value == "false";
+        let value = if is_literal { value.to_string() } else { format!("{value:?}") };
+        toml_text.push_str(&format!("[{section}]\n{field} = {value}\n"));
+    }
+    // Merge repeated section headers by parsing as a generic table first.
+    let mut merged = toml::Table::new();
+    for chunk in toml_text.split("[").filter(|c| !c.is_empty()) {
+        let t: toml::Table = toml::from_str(&format!("[{chunk}"))?;
+        for (sec, v) in t {
+            let entry = merged.entry(sec).or_insert_with(|| toml::Value::Table(Default::default()));
+            if let (toml::Value::Table(dst), toml::Value::Table(src)) = (entry, v) {
+                dst.extend(src);
+            }
+        }
+    }
+    Ok(merged.try_into()?)
+}
+
+fn win(cmd: &WinCmd) -> Result<()> {
+    match cmd {
+        WinCmd::Show => print!("{}", toml::to_string_pretty(&hidconfig_win::read()?)?),
+        WinCmd::Set { assignments, save } => {
+            let s = parse_assignments(assignments)?;
+            hidconfig_settings::apply_windows(&s)?;
+            if *save {
+                let mut cfg = hidconfig_settings::Config::load()?;
+                let mut table: toml::Table = toml::Table::try_from(&cfg.windows)?;
+                for (sec, v) in toml::Table::try_from(&s)? {
+                    if let (Some(toml::Value::Table(dst)), toml::Value::Table(src)) = (table.get_mut(&sec), v) {
+                        dst.extend(src);
+                    }
+                }
+                cfg.windows = table.try_into()?;
+                cfg.save()?;
+            }
+            let now = hidconfig_win::read()?;
+            let now_t = toml::Table::try_from(&now)?;
+            for (sec, v) in toml::Table::try_from(&s)? {
+                if let toml::Value::Table(fields) = v {
+                    for k in fields.keys() {
+                        println!("{sec}.{k} = {}", now_t[&sec][k]);
+                    }
+                }
+            }
+        }
+        WinCmd::Restore => {
+            let path = hidconfig_settings::windows_backup_path()?;
+            hidconfig_win::restore(&path)?;
+            println!("restored from {}", path.display());
+        }
+        WinCmd::Curve { reset } => {
+            if *reset {
+                hidconfig_win::mouse::reset_curve()?;
+                println!("default curve written; sign out and back in to use it");
+            }
+            println!("acceleration curve is default: {}", hidconfig_win::mouse::curve_is_default());
+        }
     }
     Ok(())
 }

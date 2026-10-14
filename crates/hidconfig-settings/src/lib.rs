@@ -18,6 +18,7 @@ use hidconfig_proto::{
     hyperspeed::{Anc, EqPreset},
     mouse::DpiStages,
 };
+use hidconfig_win::WindowsSettings;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
@@ -25,6 +26,9 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub viper: Viper,
     pub earbuds: EarbudsCfg,
+    /// Windows mouse/keyboard settings; applied at start, on resume and on edits.
+    #[serde(skip_serializing_if = "WindowsSettings::is_empty")]
+    pub windows: WindowsSettings,
 }
 
 /// Every field is optional: unset means "leave the device alone".
@@ -192,6 +196,15 @@ fn migrate_legacy(new: &std::path::Path) {
     }
 }
 
+/// Windows settings as they were before HIDConfig first changed them.
+pub fn windows_backup_path() -> Result<PathBuf> {
+    Ok(path()?.with_file_name("windows-backup.toml"))
+}
+
+pub fn apply_windows(cfg: &WindowsSettings) -> Result<()> {
+    hidconfig_win::apply(cfg, &windows_backup_path()?)
+}
+
 pub fn path() -> Result<PathBuf> {
     let appdata = std::env::var_os("APPDATA").context("APPDATA is not set")?;
     Ok(PathBuf::from(appdata).join("HIDConfig").join("config.toml"))
@@ -339,6 +352,7 @@ pub fn snapshot(api: &HidApi, base: &Config) -> Result<Config> {
 pub enum Target {
     Viper,
     Earbuds,
+    Windows,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -365,6 +379,8 @@ pub enum Trigger {
 pub struct Status {
     pub viper: Option<ViperStatus>,
     pub earbuds: Option<EarbudsStatus>,
+    /// Current Windows values (not the config).
+    pub windows: Option<WindowsSettings>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -411,6 +427,7 @@ pub struct Watcher {
     last_tick: Instant,
     status: Status,
     status_due: Instant,
+    windows_applied: bool,
 }
 
 impl Watcher {
@@ -430,6 +447,7 @@ impl Watcher {
             last_tick: Instant::now(),
             status: Status::default(),
             status_due: Instant::now(),
+            windows_applied: false,
         })
     }
 
@@ -474,7 +492,22 @@ impl Watcher {
         self.status_due = Instant::now();
     }
 
+    fn apply_windows_now(&mut self, on_event: &mut dyn FnMut(Event)) {
+        self.windows_applied = true;
+        if self.config.windows.is_empty() {
+            return;
+        }
+        on_event(match apply_windows(&self.config.windows) {
+            Ok(()) => Event::Applied(Target::Windows),
+            Err(e) => Event::Failed(Target::Windows, format!("{e:#}")),
+        });
+        self.status_due = Instant::now();
+    }
+
     fn apply_changed(&mut self, old: &Config, on_event: &mut dyn FnMut(Event)) {
+        if old.windows != self.config.windows {
+            self.apply_windows_now(on_event);
+        }
         if old.viper != self.config.viper {
             self.apply_viper_now(on_event);
         }
@@ -571,6 +604,9 @@ impl Watcher {
         let viper_now = hidconfig_hid::open_all(&self.api).iter().any(|d| d.is_ok());
         let dongle_now = matches!(Earbuds::open(&self.api), Ok(Some(_)));
 
+        if !self.windows_applied || trigger.is_some() {
+            self.apply_windows_now(on_event);
+        }
         if viper_now && (!self.viper_present || trigger.is_some()) {
             self.apply_viper_now(on_event);
             self.status_due = Instant::now();
@@ -628,7 +664,7 @@ impl Watcher {
                 mic_muted: e.mic_muted().ok(),
             }
         });
-        self.status = Status { viper, earbuds };
+        self.status = Status { viper, earbuds, windows: hidconfig_win::read().ok() };
     }
 }
 

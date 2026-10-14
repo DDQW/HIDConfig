@@ -2090,8 +2090,20 @@ dependencies = [
  "anyhow",
  "hidconfig-hid",
  "hidconfig-proto",
+ "hidconfig-win",
  "serde",
  "toml 1.1.8+spec-1.1.0",
+]
+
+[[package]]
+name = "hidconfig-win"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "toml 1.1.8+spec-1.1.0",
+ "windows",
+ "windows-registry",
 ]
 
 [[package]]
@@ -2103,6 +2115,7 @@ dependencies = [
  "hidconfig-hid",
  "hidconfig-proto",
  "hidconfig-settings",
+ "hidconfig-win",
  "toml 1.1.8+spec-1.1.0",
  "winresource",
 ]
