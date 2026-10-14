@@ -1549,6 +1549,16 @@ export struct DisplayInfo {
     preset-index: int,
     inputs: [string],
     input-index: int,
+    kelvin: int,             // -1 = not supported
+    kelvin-min: int,
+    kelvin-max: int,
+    kelvin-step: int,
+    languages: [string],
+    language-index: int,
+    has-osd: bool,
+    reset-all: bool,
+    reset-color: bool,
+    reset-picture: bool,
 }
 
 export global DisplayState {
@@ -1569,6 +1579,20 @@ export global DisplayState {
     callback input(string, int);
     callback keep();
     callback revert();
+    callback kelvin(string, int);
+    callback language(string, int);
+    callback buttons-locked(string, bool);
+    callback reset(string, int /* VCP code */);
+    callback scan(string);
+
+    // Reset confirmation
+    in-out property <string> reset-device;
+    in-out property <int> reset-code;
+    in-out property <string> reset-label;
+    // Scanner output (one monitor at a time)
+    in property <string> scan-device;
+    in property <bool> scanning;
+    in property <[string]> scan-lines;
 }
 
 /// Slider that only reports on release: monitors may store every DDC/CI write.
@@ -1723,6 +1747,113 @@ component DisplayCard inherits Card {
         Button {
             text: root.open ? "Fewer controls" : "More controls";
             clicked => { DisplayState.expanded = root.open ? "" : root.d.device; }
+        }
+    }
+    if root.d.ddc && root.d.kelvin >= 0: WideRow {
+        label: "Colour temperature";
+        Slider {
+            property <int> source: root.d.kelvin;
+            changed source => { self.value = self.source; }
+            minimum: root.d.kelvin-min;
+            maximum: root.d.kelvin-max;
+            step: root.d.kelvin-step;
+            value: root.d.kelvin;
+            released(v) => { DisplayState.kelvin(root.d.device, round(v)); }
+        }
+        Text {
+            width: 64px;
+            text: root.d.kelvin + " K";
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+    if root.d.ddc && root.open && root.d.languages.length > 0: Row {
+        label: "Menu language";
+        ComboBox {
+            width: Theme.combo-width;
+            model: root.d.languages;
+            property <int> source: root.d.language-index;
+            changed source => { self.current-index = self.source; }
+            current-index: root.d.language-index;
+            selected => { DisplayState.language(root.d.device, self.current-index); }
+        }
+    }
+    if root.d.ddc && root.open && root.d.has-osd: Row {
+        label: "Monitor buttons";
+        hint: "Lock the menu against accidental presses";
+        Button { text: "Lock"; clicked => { DisplayState.buttons-locked(root.d.device, true); } }
+        Button { text: "Unlock"; clicked => { DisplayState.buttons-locked(root.d.device, false); } }
+    }
+    if root.d.ddc && root.open && (root.d.reset-all || root.d.reset-color || root.d.reset-picture): Row {
+        label: "Factory reset";
+        if root.d.reset-picture: Button {
+            text: "Brightness/contrast";
+            clicked => {
+                DisplayState.reset-device = root.d.device;
+                DisplayState.reset-code = 5;
+                DisplayState.reset-label = "brightness and contrast";
+            }
+        }
+        if root.d.reset-color: Button {
+            text: "Colour";
+            clicked => {
+                DisplayState.reset-device = root.d.device;
+                DisplayState.reset-code = 8;
+                DisplayState.reset-label = "colour settings";
+            }
+        }
+        if root.d.reset-all: Button {
+            text: "Everything";
+            clicked => {
+                DisplayState.reset-device = root.d.device;
+                DisplayState.reset-code = 4;
+                DisplayState.reset-label = "ALL monitor settings";
+            }
+        }
+    }
+    if DisplayState.reset-device == root.d.device: Rectangle {
+        background: Theme.warn.with-alpha(0.18);
+        border-radius: 6px;
+        HorizontalLayout {
+            padding: 10px;
+            spacing: 8px;
+            Text {
+                horizontal-stretch: 1;
+                text: "Reset " + DisplayState.reset-label + " to factory defaults?";
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+            Button { text: "Cancel"; clicked => { DisplayState.reset-device = ""; } }
+            Button {
+                text: "Reset";
+                primary: true;
+                clicked => {
+                    DisplayState.reset(DisplayState.reset-device, DisplayState.reset-code);
+                    DisplayState.reset-device = "";
+                }
+            }
+        }
+    }
+    if root.d.ddc && root.open: Row {
+        label: "All controls";
+        hint: "Read-only scan of codes 00-FF";
+        Button {
+            text: DisplayState.scanning && DisplayState.scan-device == root.d.device ? "Scanning…" : "Scan";
+            enabled: !DisplayState.scanning;
+            clicked => { DisplayState.scan(root.d.device); }
+        }
+    }
+    if DisplayState.scan-device == root.d.device && DisplayState.scan-lines.length > 0: Rectangle {
+        background: Palette.background;
+        border-radius: 6px;
+        VerticalLayout {
+            padding: 10px;
+            spacing: 2px;
+            for line in DisplayState.scan-lines: Text {
+                text: line;
+                font-family: "Consolas";
+                font-size: 11px;
+            }
         }
     }
     if root.d.ddc && root.open && root.d.sharpness >= 0: VcpSlider {

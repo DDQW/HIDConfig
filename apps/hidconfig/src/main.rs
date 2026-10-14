@@ -774,6 +774,79 @@ fn wire_display(ui: &SettingsWindow, tx: &Sender<Cmd>) {
         let dev = dev.to_string();
         display_op(&t, move || d::set_vcp(&dev, vcp::INPUT, v as u32));
     });
+    let t = tx.clone();
+    st.on_kelvin(move |dev, k| {
+        let dev = dev.to_string();
+        display_op(&t, move || d::set_color_temp(&dev, k.max(0) as u32));
+    });
+    let t = tx.clone();
+    st.on_language(move |dev, i| {
+        let Some(v) = with_display(&dev, |x| {
+            x.ddc
+                .as_ref()?
+                .caps
+                .get(&vcp::OSD_LANGUAGE)?
+                .get(i as usize)
+                .copied()
+        }) else {
+            return;
+        };
+        let dev = dev.to_string();
+        display_op(&t, move || d::set_vcp(&dev, vcp::OSD_LANGUAGE, v as u32));
+    });
+    let t = tx.clone();
+    st.on_buttons_locked(move |dev, lock| {
+        let dev = dev.to_string();
+        let v = if lock {
+            vcp::OSD_LOCKED
+        } else {
+            vcp::OSD_UNLOCKED
+        };
+        display_op(&t, move || d::set_vcp(&dev, vcp::OSD, v));
+    });
+    let t = tx.clone();
+    st.on_reset(move |dev, code| {
+        let dev = dev.to_string();
+        display_op(&t, move || d::set_vcp(&dev, code as u8, 1));
+    });
+    let w = ui.as_weak();
+    st.on_scan(move |dev| {
+        let Some(ui) = w.upgrade() else { return };
+        let st = ui.global::<DisplayState>();
+        st.set_scan_device(dev.clone());
+        st.set_scanning(true);
+        st.set_scan_lines(slint::ModelRc::default());
+        let dev = dev.to_string();
+        let w = w.clone();
+        std::thread::spawn(move || {
+            let lines: Vec<String> = match d::scan(&dev) {
+                Ok(v) => v
+                    .iter()
+                    .map(|v| {
+                        format!(
+                            "{:02X}  {:<28} {:>6} / {:<6} {}{}",
+                            v.code,
+                            d::vcp_name(v.code),
+                            v.current,
+                            v.max,
+                            if v.momentary { "action" } else { "value" },
+                            if v.listed { "" } else { "  (not advertised)" }
+                        )
+                    })
+                    .collect(),
+                Err(e) => vec![format!("scan failed: {e:#}")],
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = w.upgrade() {
+                    let st = ui.global::<DisplayState>();
+                    let model: Vec<slint::SharedString> =
+                        lines.into_iter().map(Into::into).collect();
+                    st.set_scan_lines(slint::ModelRc::new(slint::VecModel::from(model)));
+                    st.set_scanning(false);
+                }
+            });
+        });
+    });
     let w = ui.as_weak();
     st.on_keep(move || {
         REVERT.with(|r| *r.borrow_mut() = None);
@@ -821,6 +894,8 @@ fn update_display(ui: &SettingsWindow, s: &Snapshot) {
             };
             let presets = list(vcp::COLOR_PRESET);
             let inputs = list(vcp::INPUT);
+            let langs = list(vcp::OSD_LANGUAGE);
+            let ct = ddc.and_then(|c| c.color_temp());
             let cur = |code| ddc.and_then(|c| c.get(code)).map(|v| v as u8);
             DisplayInfo {
                 device: x.device.clone().into(),
@@ -875,6 +950,21 @@ fn update_display(ui: &SettingsWindow, s: &Snapshot) {
                     prev.map(|p| p.inputs.clone()),
                     inputs.iter().map(|v| d::input_name(*v)).collect(),
                 ),
+                kelvin: ct.map_or(-1, |t| t.0 as i32),
+                kelvin_min: ct.map_or(3000, |t| t.1 as i32),
+                kelvin_max: ct.map_or(10000, |t| t.2 as i32),
+                kelvin_step: ct.map_or(100, |t| t.3 as i32),
+                languages: keep(
+                    prev.map(|p| p.languages.clone()),
+                    langs.iter().map(|v| d::language_name(*v)).collect(),
+                ),
+                language_index: cur(vcp::OSD_LANGUAGE)
+                    .and_then(|c| langs.iter().position(|&v| v == c))
+                    .map_or(-1, |i| i as i32),
+                has_osd: ddc.is_some_and(|c| c.supports(vcp::OSD)),
+                reset_all: ddc.is_some_and(|c| c.supports(vcp::RESET_ALL)),
+                reset_color: ddc.is_some_and(|c| c.supports(vcp::RESET_COLOR)),
+                reset_picture: ddc.is_some_and(|c| c.supports(vcp::RESET_BRIGHTNESS_CONTRAST)),
                 input_index: cur(vcp::INPUT)
                     .and_then(|c| inputs.iter().position(|&v| v == c))
                     .map_or(-1, |i| i as i32),

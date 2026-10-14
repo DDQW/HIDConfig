@@ -382,6 +382,151 @@ pub mod vcp {
     pub const SHARPNESS: u8 = 0x87;
     pub const MUTE: u8 = 0x8d;
     pub const POWER: u8 = 0xd6;
+    pub const RESET_ALL: u8 = 0x04;
+    pub const RESET_BRIGHTNESS_CONTRAST: u8 = 0x05;
+    pub const RESET_COLOR: u8 = 0x08;
+    pub const COLOR_TEMP_INCREMENT: u8 = 0x0b;
+    pub const COLOR_TEMP: u8 = 0x0c;
+    pub const OSD: u8 = 0xca;
+    pub const OSD_LANGUAGE: u8 = 0xcc;
+
+    /// MCCS: OSD disabled / enabled (VCP 0xCA).
+    pub const OSD_LOCKED: u32 = 1;
+    pub const OSD_UNLOCKED: u32 = 2;
+}
+
+/// MCCS 2.2 name of a VCP code (for the scanner).
+pub fn vcp_name(code: u8) -> &'static str {
+    match code {
+        0x01 => "Degauss",
+        0x02 => "New control value",
+        0x03 => "Soft controls",
+        0x04 => "Restore factory defaults",
+        0x05 => "Restore brightness/contrast",
+        0x06 => "Restore geometry",
+        0x08 => "Restore colour",
+        0x0b => "Colour temperature increment",
+        0x0c => "Colour temperature",
+        0x0e => "Clock",
+        0x10 => "Brightness",
+        0x11 => "Flesh tone enhancement",
+        0x12 => "Contrast",
+        0x13 => "Backlight control",
+        0x14 => "Colour preset",
+        0x16 => "Red gain",
+        0x17 => "User colour vision compensation",
+        0x18 => "Green gain",
+        0x1a => "Blue gain",
+        0x1e => "Auto setup",
+        0x1f => "Auto colour setup",
+        0x20 => "Horizontal position",
+        0x30 => "Vertical position",
+        0x3e => "Clock phase",
+        0x52 => "Active control",
+        0x56 => "Horizontal moiré",
+        0x58 => "Vertical moiré",
+        0x59..=0x5e => "Six-axis saturation",
+        0x60 => "Input source",
+        0x62 => "Speaker volume",
+        0x63 => "Speaker select",
+        0x6c => "Red black level",
+        0x6e => "Green black level",
+        0x70 => "Blue black level",
+        0x72 => "Gamma",
+        0x86 => "Display scaling",
+        0x87 => "Sharpness",
+        0x8a => "Saturation",
+        0x8d => "Audio mute",
+        0x90 => "Hue",
+        0x9b..=0xa0 => "Six-axis hue",
+        0xa2 => "Auto setup on/off",
+        0xaa => "Screen orientation",
+        0xac => "Horizontal frequency",
+        0xae => "Vertical frequency",
+        0xb2 => "Flat panel sub-pixel layout",
+        0xb6 => "Display technology",
+        0xc0 => "Display usage time",
+        0xc6 => "Application enable key",
+        0xc8 => "Display controller type",
+        0xc9 => "Firmware level",
+        0xca => "OSD / button control",
+        0xcc => "OSD language",
+        0xd6 => "Power mode",
+        0xdc => "Display mode",
+        0xdf => "VCP version",
+        0xe0..=0xff => "Manufacturer specific",
+        _ => "",
+    }
+}
+
+/// MCCS OSD language codes (VCP 0xCC).
+pub fn language_name(v: u8) -> String {
+    const NAMES: [&str; 0x26] = [
+        "Reserved",
+        "Chinese (traditional)",
+        "English",
+        "French",
+        "German",
+        "Italian",
+        "Japanese",
+        "Korean",
+        "Portuguese (Portugal)",
+        "Russian",
+        "Spanish",
+        "Swedish",
+        "Turkish",
+        "Chinese (simplified)",
+        "Portuguese (Brazil)",
+        "Arabic",
+        "Bulgarian",
+        "Croatian",
+        "Czech",
+        "Danish",
+        "Dutch",
+        "Estonian",
+        "Finnish",
+        "Greek",
+        "Hebrew",
+        "Hindi",
+        "Hungarian",
+        "Latvian",
+        "Lithuanian",
+        "Norwegian",
+        "Polish",
+        "Romanian",
+        "Serbian",
+        "Slovak",
+        "Slovenian",
+        "Thai",
+        "Ukrainian",
+        "Vietnamese",
+    ];
+    NAMES
+        .get(v as usize)
+        .map_or_else(|| format!("Language {v:#04x}"), |n| n.to_string())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VcpInfo {
+    pub code: u8,
+    /// Momentary (an action) vs set parameter (a value).
+    pub momentary: bool,
+    pub current: u32,
+    pub max: u32,
+    /// Listed in the monitor's capability string.
+    pub listed: bool,
+}
+
+impl Ddc {
+    /// Colour temperature in Kelvin: (current, min, max, step).
+    pub fn color_temp(&self) -> Option<(u32, u32, u32, u32)> {
+        let (cur, max) = *self.values.get(&vcp::COLOR_TEMP)?;
+        let step = self
+            .get(vcp::COLOR_TEMP_INCREMENT)
+            .filter(|s| (1..=1000).contains(s))
+            .unwrap_or(100);
+        Some((3000 + cur * step, 3000, 3000 + max * step, step))
+    }
 }
 
 pub fn control_name(code: u8) -> String {
@@ -567,6 +712,9 @@ fn read_caps(m: &PHYSICAL_MONITOR) -> Option<String> {
 
 /// Codes whose current value we read (and show).
 const SHOWN: &[u8] = &[
+    vcp::COLOR_TEMP_INCREMENT,
+    vcp::COLOR_TEMP,
+    vcp::OSD_LANGUAGE,
     vcp::BRIGHTNESS,
     vcp::CONTRAST,
     vcp::COLOR_PRESET,
@@ -607,7 +755,11 @@ fn ddc_for(h: HMONITOR, key: &str) -> Option<Ddc> {
 // writes (wrote 50, monitor reports 28 -> 0.56) and show values in menu terms.
 
 fn scale_file() -> Option<std::path::PathBuf> {
-    Some(std::path::PathBuf::from(std::env::var_os("APPDATA")?).join("HIDConfig").join("ddc-scale.toml"))
+    Some(
+        std::path::PathBuf::from(std::env::var_os("APPDATA")?)
+            .join("HIDConfig")
+            .join("ddc-scale.toml"),
+    )
 }
 
 static SCALES: std::sync::Mutex<Option<BTreeMap<String, f64>>> = std::sync::Mutex::new(None);
@@ -649,8 +801,9 @@ fn learn_scale(m: &PHYSICAL_MONITOR, code: u8, written: u32, reported: u32) {
 
 /// Converts a reported value to the monitor's menu scale, if a factor is known.
 fn to_menu(m: &PHYSICAL_MONITOR, code: u8, reported: u32, max: u32) -> u32 {
-    with_scales(|map| map.get(&scale_key(m, code)).copied())
-        .map_or(reported, |r| ((reported as f64 / r).round() as u32).min(max))
+    with_scales(|map| map.get(&scale_key(m, code)).copied()).map_or(reported, |r| {
+        ((reported as f64 / r).round() as u32).min(max)
+    })
 }
 
 /// Sets a VCP value on the monitor shown as `device`.
@@ -665,12 +818,26 @@ pub fn set_vcp(device: &str, code: u8, value: u32) -> Result<()> {
     }
     // Some monitors acknowledge the write but ignore it while a picture mode owns
     // the setting (e.g. dynamic contrast / ECO locking brightness). Say so.
-    let Some((before, max)) = before else { return Ok(()) };
-    if code == vcp::INPUT || code == vcp::COLOR_PRESET || to_menu(m, code, before, max) == value {
+    let Some((before, max)) = before else {
+        return Ok(());
+    };
+    let not_a_level = [
+        vcp::INPUT,
+        vcp::COLOR_PRESET,
+        vcp::RESET_ALL,
+        vcp::RESET_BRIGHTNESS_CONTRAST,
+        vcp::RESET_COLOR,
+        vcp::OSD,
+        vcp::OSD_LANGUAGE,
+        vcp::POWER,
+    ];
+    if not_a_level.contains(&code) || to_menu(m, code, before, max) == value {
         return Ok(());
     }
     std::thread::sleep(std::time::Duration::from_millis(300));
-    let Some((after, _)) = read_vcp(m, code) else { return Ok(()) };
+    let Some((after, _)) = read_vcp(m, code) else {
+        return Ok(());
+    };
     if after != before {
         learn_scale(m, code, value, after);
         return Ok(());
@@ -685,6 +852,63 @@ pub fn set_vcp(device: &str, code: u8, value: u32) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Sets the colour temperature in Kelvin (rounded to the monitor's step).
+pub fn set_color_temp(device: &str, kelvin: u32) -> Result<()> {
+    let h = hmonitor_for(device).with_context(|| format!("no display {device}"))?;
+    let phys = physical(h).context("monitor doesn't expose a physical handle")?;
+    let m = phys.0.first().context("no physical monitor")?;
+    let step = read_vcp(m, vcp::COLOR_TEMP_INCREMENT)
+        .map(|v| v.0)
+        .filter(|s| (1..=1000).contains(s))
+        .unwrap_or(100);
+    let max = read_vcp(m, vcp::COLOR_TEMP)
+        .map(|v| v.1)
+        .context("monitor has no colour temperature control")?;
+    let value = (kelvin.saturating_sub(3000) + step / 2) / step;
+    drop(phys);
+    set_vcp(device, vcp::COLOR_TEMP, value.min(max))
+}
+
+/// Reads every VCP code 0x00-0xFF (read-only; ~10-20 s). Works on any DDC/CI monitor.
+pub fn scan(device: &str) -> Result<Vec<VcpInfo>> {
+    let h = hmonitor_for(device).with_context(|| format!("no display {device}"))?;
+    let phys = physical(h).context("monitor doesn't expose a physical handle")?;
+    let m = phys.0.first().context("no physical monitor")?;
+    let listed = read_caps(m).map(|c| parse_caps(&c)).unwrap_or_default();
+    let mut out = Vec::new();
+    for code in 0..=255u8 {
+        for _ in 0..2 {
+            let (mut kind, mut cur, mut max) = (MC_VCP_CODE_TYPE::default(), 0u32, 0u32);
+            // SAFETY: plain out values on a valid handle.
+            let ok = unsafe {
+                GetVCPFeatureAndVCPFeatureReply(
+                    m.hPhysicalMonitor,
+                    code,
+                    Some(&mut kind),
+                    &mut cur,
+                    Some(&mut max),
+                )
+            } != 0;
+            if ok {
+                out.push(VcpInfo {
+                    code,
+                    momentary: kind == MC_MOMENTARY,
+                    current: cur,
+                    max,
+                    listed: listed.contains_key(&code),
+                });
+                break;
+            }
+            // Advertised codes get one retry; the rest are probed once.
+            if !listed.contains_key(&code) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------

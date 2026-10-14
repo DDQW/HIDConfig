@@ -326,6 +326,14 @@ enum DisplayCmd {
     Hdr { display: String, state: OnOff },
     /// Scaling in percent (100, 125, 150 ...).
     Scale { display: String, percent: u32 },
+    /// Read every DDC/CI control 00-FF of a monitor (read-only, ~15 s).
+    Scan { display: String },
+    /// Colour temperature in Kelvin.
+    Temp { display: String, kelvin: u32 },
+    /// Reset the monitor to factory settings: all, color, or picture (brightness/contrast).
+    Reset { display: String, what: String },
+    /// Lock or unlock the monitor's own menu buttons.
+    Buttons { display: String, state: String },
     /// Set a monitor control: brightness, contrast, volume, input, preset, sharpness, or a hex VCP code.
     Set {
         display: String,
@@ -421,6 +429,46 @@ fn display(cmd: &DisplayCmd) -> Result<()> {
         DisplayCmd::Scale { display, percent } => {
             d::set_scale(&display_device(display), *percent)?;
             println!("scaling {percent}%");
+        }
+        DisplayCmd::Scan { display } => {
+            for v in d::scan(&display_device(display))? {
+                println!(
+                    "{:02X} {:<30} {:>6} / {:<6} {}{}",
+                    v.code,
+                    d::vcp_name(v.code),
+                    v.current,
+                    v.max,
+                    if v.momentary { "action" } else { "value " },
+                    if v.listed { "" } else { "  (not advertised)" }
+                );
+            }
+        }
+        DisplayCmd::Temp { display, kelvin } => {
+            d::set_color_temp(&display_device(display), *kelvin)?;
+            let x = d::displays(true)?
+                .into_iter()
+                .find(|x| x.device == display_device(display));
+            let k = x.and_then(|x| x.ddc?.color_temp()).map(|t| t.0);
+            println!("colour temperature now {:?} K", k);
+        }
+        DisplayCmd::Reset { display, what } => {
+            let code = match what.as_str() {
+                "all" => vcp::RESET_ALL,
+                "color" | "colour" => vcp::RESET_COLOR,
+                "picture" => vcp::RESET_BRIGHTNESS_CONTRAST,
+                _ => anyhow::bail!("reset all | color | picture"),
+            };
+            d::set_vcp(&display_device(display), code, 1)?;
+            println!("reset sent");
+        }
+        DisplayCmd::Buttons { display, state } => {
+            let v = match state.as_str() {
+                "lock" => vcp::OSD_LOCKED,
+                "unlock" => vcp::OSD_UNLOCKED,
+                _ => anyhow::bail!("buttons lock | unlock"),
+            };
+            d::set_vcp(&display_device(display), vcp::OSD, v)?;
+            println!("menu buttons: {state} sent");
         }
         DisplayCmd::Set {
             display,
