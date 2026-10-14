@@ -2069,7 +2069,7 @@ dependencies = [
 
 [[package]]
 name = "hidconfig"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "hidconfig-hid",
@@ -2087,7 +2087,7 @@ dependencies = [
 
 [[package]]
 name = "hidconfig-hid"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "hidapi",
@@ -2096,11 +2096,11 @@ dependencies = [
 
 [[package]]
 name = "hidconfig-proto"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "hidconfig-settings"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "hidconfig-hid",
@@ -2112,7 +2112,7 @@ dependencies = [
 
 [[package]]
 name = "hidconfig-win"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -2125,7 +2125,7 @@ dependencies = [
 
 [[package]]
 name = "hidconfigctl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",

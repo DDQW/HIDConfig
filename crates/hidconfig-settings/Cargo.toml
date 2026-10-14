@@ -6,8 +6,8 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
-hidconfig-hid = { version = "0.1.0", path = "../hidconfig-hid" }
-hidconfig-proto = { version = "0.1.0", path = "../hidconfig-proto" }
-hidconfig-win = { version = "0.1.0", path = "../hidconfig-win" }
+hidconfig-hid = { path = "../hidconfig-hid" }
+hidconfig-proto = { path = "../hidconfig-proto" }
+hidconfig-win = { path = "../hidconfig-win" }
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.8"
