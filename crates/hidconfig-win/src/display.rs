@@ -597,9 +597,60 @@ fn ddc_for(h: HMONITOR, key: &str) -> Option<Ddc> {
     let values = SHOWN
         .iter()
         .filter(|c| caps.contains_key(c))
-        .filter_map(|&c| read_vcp(m, c).map(|v| (c, v)))
+        .filter_map(|&c| read_vcp(m, c).map(|(cur, max)| (c, (to_menu(m, c, cur, max), max))))
         .collect();
     Some(Ddc { caps, values })
+}
+
+// Some monitors report the *effective* value over DDC/CI (e.g. backlight after an
+// ECO cap) while their menu shows the setting. We learn the factor from our own
+// writes (wrote 50, monitor reports 28 -> 0.56) and show values in menu terms.
+
+fn scale_file() -> Option<std::path::PathBuf> {
+    Some(std::path::PathBuf::from(std::env::var_os("APPDATA")?).join("HIDConfig").join("ddc-scale.toml"))
+}
+
+static SCALES: std::sync::Mutex<Option<BTreeMap<String, f64>>> = std::sync::Mutex::new(None);
+
+fn with_scales<R>(f: impl FnOnce(&mut BTreeMap<String, f64>) -> R) -> R {
+    let mut guard = SCALES.lock().unwrap_or_else(|e| e.into_inner());
+    let map = guard.get_or_insert_with(|| {
+        scale_file()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| toml::from_str(&s).ok())
+            .unwrap_or_default()
+    });
+    f(map)
+}
+
+fn scale_key(m: &PHYSICAL_MONITOR, code: u8) -> String {
+    // Packed struct: copy the field before borrowing it.
+    let desc = m.szPhysicalMonitorDescription;
+    format!("{} {code:02x}", from_wide(&desc))
+}
+
+fn learn_scale(m: &PHYSICAL_MONITOR, code: u8, written: u32, reported: u32) {
+    let key = scale_key(m, code);
+    let ratio = reported as f64 / written as f64;
+    with_scales(|map| {
+        if written >= 10 && (0.1..0.97).contains(&ratio) {
+            map.insert(key, ratio);
+        } else if reported == written {
+            map.remove(&key);
+        } else {
+            return;
+        }
+        if let Some(p) = scale_file() {
+            let _ = std::fs::create_dir_all(p.parent().unwrap());
+            let _ = std::fs::write(p, toml::to_string(&*map).unwrap_or_default());
+        }
+    });
+}
+
+/// Converts a reported value to the monitor's menu scale, if a factor is known.
+fn to_menu(m: &PHYSICAL_MONITOR, code: u8, reported: u32, max: u32) -> u32 {
+    with_scales(|map| map.get(&scale_key(m, code)).copied())
+        .map_or(reported, |r| ((reported as f64 / r).round() as u32).min(max))
 }
 
 /// Sets a VCP value on the monitor shown as `device`.
@@ -607,23 +658,31 @@ pub fn set_vcp(device: &str, code: u8, value: u32) -> Result<()> {
     let h = hmonitor_for(device).with_context(|| format!("no display {device}"))?;
     let phys = physical(h).context("monitor doesn't expose a physical handle")?;
     let m = phys.0.first().context("no physical monitor")?;
-    let before = read_vcp(m, code).map(|v| v.0);
+    let before = read_vcp(m, code);
     // SAFETY: valid physical monitor handle.
     if unsafe { SetVCPFeature(m.hPhysicalMonitor, code, value) } == 0 {
         bail!("monitor didn't accept VCP {code:#04x} = {value} (is DDC/CI enabled in its menu?)");
     }
     // Some monitors acknowledge the write but ignore it while a picture mode owns
     // the setting (e.g. dynamic contrast / ECO locking brightness). Say so.
-    if code != vcp::INPUT && before.is_some_and(|b| b != value) {
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        if read_vcp(m, code).map(|v| v.0) == before {
-            bail!(
-                "the monitor kept {} at {} - it's probably locked by a picture mode \
-                 (dynamic/advanced contrast, ECO, a game preset); turn that off in the monitor's menu",
-                control_name(code),
-                before.unwrap_or_default()
-            );
-        }
+    let Some((before, max)) = before else { return Ok(()) };
+    if code == vcp::INPUT || code == vcp::COLOR_PRESET || to_menu(m, code, before, max) == value {
+        return Ok(());
+    }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let Some((after, _)) = read_vcp(m, code) else { return Ok(()) };
+    if after != before {
+        learn_scale(m, code, value, after);
+        return Ok(());
+    }
+    let ratio = with_scales(|map| map.get(&scale_key(m, code)).copied()).unwrap_or(1.0);
+    let expected = (value as f64 * ratio).round() as i64;
+    if (expected - before as i64).abs() >= 2 {
+        bail!(
+            "the monitor kept {} at {} - it's probably locked by a picture mode              (dynamic/advanced contrast, ECO, a game preset); turn that off in the monitor's menu",
+            control_name(code),
+            to_menu(m, code, before, max)
+        );
     }
     Ok(())
 }
