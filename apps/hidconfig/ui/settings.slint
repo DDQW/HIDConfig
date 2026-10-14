@@ -1750,7 +1750,7 @@ component DisplayCard inherits Card {
     }
     if root.d.acm-supported: Row {
         label: "Automatic colour management";
-        hint: "Accurate colours in Native mode, no sRGB mode needed";
+        hint: "Windows maps all colours through the profile below";
         Switch {
             property <bool> source: root.d.acm-on;
             changed source => { self.checked = self.source; }
@@ -1770,7 +1770,7 @@ component DisplayCard inherits Card {
 
     Row {
         label: "Colour profile";
-        hint: "ICC profile Windows uses";
+        hint: root.d.acm-on ? "Applied to the whole desktop (ACM on)" : "Only colour-managed apps use it";
         ComboBox {
             width: 260px;
             model: root.d.profiles;
