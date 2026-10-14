@@ -343,6 +343,8 @@ enum DisplayCmd {
     },
     /// SDR content brightness while HDR is on (80-480 nits).
     Sdr { display: String, nits: u32 },
+    /// Automatic Color Management (Windows 11 24H2+).
+    Acm { display: String, state: OnOff },
     /// Turn all displays off now.
     Off,
     /// Hardware-accelerated GPU scheduling (admin; restart needed).
@@ -398,6 +400,23 @@ fn display(cmd: &DisplayCmd) -> Result<()> {
                         "off".into()
                     }
                 );
+                if let Some(a) = &x.acm {
+                    println!(
+                        "  ACM:      {}{}",
+                        if !a.supported {
+                            "not supported"
+                        } else if a.enabled {
+                            "on"
+                        } else {
+                            "off"
+                        },
+                        if a.limited_by_policy {
+                            " (limited by policy)"
+                        } else {
+                            ""
+                        }
+                    );
+                }
                 if let Some(h) = &x.hdr_info {
                     println!(
                         "  signal:   {}-bit {}{}",
@@ -537,6 +556,13 @@ fn display(cmd: &DisplayCmd) -> Result<()> {
             println!("SDR content brightness {nits} nits");
         }
         DisplayCmd::Off => hidconfig_win::graphics::displays_off(),
+        DisplayCmd::Acm { display, state } => {
+            d::set_acm(&display_device(display), state.on())?;
+            println!(
+                "Automatic Color Management {}",
+                if state.on() { "on" } else { "off" }
+            );
+        }
         DisplayCmd::GpuScheduling { state } => {
             hidconfig_win::graphics::set_gpu_scheduling(state.on())?;
             println!(

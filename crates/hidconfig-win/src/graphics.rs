@@ -112,6 +112,74 @@ pub(crate) fn set_sdr_nits(adapter: LUID, target: u32, nits: u32) -> Result<()> 
 }
 
 // ---------------------------------------------------------------------------
+// Automatic Color Management (Windows 11 24H2+). Documented in wingdi.h
+// (DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 / DISPLAYCONFIG_SET_WCG_STATE) but not
+// yet in the `windows` crate's metadata, so declared here.
+
+const GET_ADVANCED_COLOR_INFO_2: i32 = 15;
+const SET_WCG_STATE: i32 = 17;
+
+#[repr(C)]
+#[derive(Default)]
+struct AdvancedColorInfo2 {
+    header: DISPLAYCONFIG_DEVICE_INFO_HEADER,
+    /// Bit field, see [`AcmState`].
+    value: u32,
+    color_encoding: i32,
+    bits_per_color_channel: u32,
+    /// 0 SDR, 1 WCG (ACM), 2 HDR.
+    active_color_mode: i32,
+}
+
+#[repr(C)]
+struct SetWcgState {
+    header: DISPLAYCONFIG_DEVICE_INFO_HEADER,
+    value: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AcmState {
+    /// The display/driver can do wide-colour (ACM) mode.
+    pub supported: bool,
+    /// The user setting is on.
+    pub enabled: bool,
+    /// Blocked by policy (e.g. battery saver).
+    pub limited_by_policy: bool,
+}
+
+pub(crate) fn acm(adapter: LUID, target: u32) -> Option<AcmState> {
+    let mut v = AdvancedColorInfo2 {
+        header: header::<AdvancedColorInfo2>(GET_ADVANCED_COLOR_INFO_2, adapter, target),
+        ..Default::default()
+    };
+    // SAFETY: header size describes AdvancedColorInfo2; older Windows returns an error.
+    if unsafe { DisplayConfigGetDeviceInfo(&mut v.header) } != 0 {
+        return None;
+    }
+    // bit 3 advancedColorLimitedByPolicy, 6 wideColorSupported, 7 wideColorUserEnabled
+    Some(AcmState {
+        supported: v.value & (1 << 6) != 0,
+        enabled: v.value & (1 << 7) != 0,
+        limited_by_policy: v.value & (1 << 3) != 0,
+    })
+}
+
+pub(crate) fn set_acm(adapter: LUID, target: u32, on: bool) -> Result<()> {
+    let v = SetWcgState {
+        header: header::<SetWcgState>(SET_WCG_STATE, adapter, target),
+        value: on as u32,
+    };
+    // SAFETY: header size describes SetWcgState.
+    let r = unsafe { DisplayConfigSetDeviceInfo(&v.header) };
+    if r != 0 {
+        bail!(
+            "switching Automatic Color Management failed ({r}); needs Windows 11 24H2 and driver support"
+        );
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Windows graphics toggles (Settings > System > Display > Graphics)
 
 const DX_KEY: &str = r"Software\Microsoft\DirectX\UserGpuPreferences";

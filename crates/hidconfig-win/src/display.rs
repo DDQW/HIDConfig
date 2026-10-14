@@ -46,6 +46,8 @@ pub struct Display {
     pub modes: Vec<Mode>,
     pub hdr_supported: bool,
     pub hdr_on: bool,
+    /// Automatic Color Management (Windows 11 24H2+); `None` = not available.
+    pub acm: Option<crate::graphics::AcmState>,
     /// Bit depth, colour encoding and SDR content brightness of the link.
     pub hdr_info: Option<crate::graphics::HdrInfo>,
     /// Current scaling in percent and the choices Windows allows.
@@ -394,6 +396,12 @@ fn path_for(device: &str) -> Result<Path> {
 
 pub fn set_hdr(device: &str, on: bool) -> Result<()> {
     set_hdr_on(&path_for(device)?, on)
+}
+
+/// Automatic Color Management on/off.
+pub fn set_acm(device: &str, on: bool) -> Result<()> {
+    let p = path_for(device)?;
+    crate::graphics::set_acm(p.target.adapterId, p.target.id, on)
 }
 
 /// SDR content brightness while HDR is on (80-480 nits).
@@ -1000,6 +1008,7 @@ pub fn displays(with_ddc: bool) -> Result<Vec<Display>> {
             hdr_supported,
             hdr_on,
             hdr_info: path.and_then(|p| crate::graphics::hdr_info(p.target.adapterId, p.target.id)),
+            acm: path.and_then(|p| crate::graphics::acm(p.target.adapterId, p.target.id)),
             scale,
             scales,
             ddc,

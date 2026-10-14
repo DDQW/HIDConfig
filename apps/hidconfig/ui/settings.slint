@@ -1605,6 +1605,8 @@ export struct DisplayInfo {
     reset-color: bool,
     reset-picture: bool,
     signal: string,          // e.g. "8-bit RGB"
+    acm-supported: bool,
+    acm-on: bool,
     sdr-nits: int,           // -1 = HDR off
     profiles: [string],      // "System default (x.icm)" first
     profile-index: int,
@@ -1629,6 +1631,7 @@ export global DisplayState {
     callback keep();
     callback revert();
     callback kelvin(string, int);
+    callback acm(string, bool);
     callback language(string, int);
     callback buttons-locked(string, bool);
     callback reset(string, int /* VCP code */);
@@ -1743,6 +1746,16 @@ component DisplayCard inherits Card {
             maximum: 480;
             unit: "nits";
             commit(v) => { GfxState.sdr(root.d.device, v); }
+        }
+    }
+    if root.d.acm-supported: Row {
+        label: "Automatic colour management";
+        hint: "Accurate colours in Native mode, no sRGB mode needed";
+        Switch {
+            property <bool> source: root.d.acm-on;
+            changed source => { self.checked = self.source; }
+            checked: root.d.acm-on;
+            toggled => { DisplayState.acm(root.d.device, self.checked); }
         }
     }
     if root.d.hdr-supported: Row {

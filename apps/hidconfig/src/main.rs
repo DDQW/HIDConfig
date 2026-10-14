@@ -786,6 +786,11 @@ fn wire_display(ui: &SettingsWindow, tx: &Sender<Cmd>) {
         display_op(&t, move || d::set_vcp(&dev, vcp::INPUT, v as u32));
     });
     let t = tx.clone();
+    st.on_acm(move |dev, on| {
+        let dev = dev.to_string();
+        display_op(&t, move || d::set_acm(&dev, on));
+    });
+    let t = tx.clone();
     st.on_kelvin(move |dev, k| {
         let dev = dev.to_string();
         display_op(&t, move || d::set_color_temp(&dev, k.max(0) as u32));
@@ -1197,6 +1202,8 @@ fn update_display(ui: &SettingsWindow, s: &Snapshot) {
                         format!("{}-bit {}", h.bits_per_channel, h.encoding)
                     })
                     .into(),
+                acm_supported: x.acm.is_some_and(|a| a.supported),
+                acm_on: x.acm.is_some_and(|a| a.enabled),
                 sdr_nits: if x.hdr_on {
                     x.hdr_info
                         .as_ref()
