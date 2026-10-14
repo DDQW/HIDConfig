@@ -293,7 +293,10 @@ fn win(cmd: &WinCmd) -> Result<()> {
                 hidconfig_win::mouse::reset_curve()?;
                 println!("default curve written; sign out and back in to use it");
             }
-            println!("acceleration curve is default: {}", hidconfig_win::mouse::curve_is_default());
+            println!(
+                "acceleration curve is default: {}",
+                hidconfig_win::mouse::curve_is_default()
+            );
         }
     }
     Ok(())
@@ -315,8 +318,23 @@ enum AudioCmd {
     },
     /// Apps currently playing audio.
     Apps,
+    /// Advanced options of a device: format, enhancements, exclusive mode.
+    Options { device: String },
+    /// Set the device's default format, e.g. `format "Speakers (Razer" 48000 24`.
+    Format { device: String, rate: u32, bits: u16 },
+    /// Audio enhancements on/off.
+    Enhancements { device: String, state: OnOff },
+    /// Allow apps to take exclusive control (and optionally give them priority).
+    Exclusive {
+        device: String,
+        state: OnOff,
+        #[arg(long)]
+        priority: Option<OnOff>,
+    },
     /// Spatial sound state of every output.
     Spatial,
+    /// Set a device's spatial format: windows-sonic, dolby-atmos-headphones, dts-headphone-x, ... or off.
+    SpatialSet { device: String, format: String },
     /// Set an app's volume (percent) and/or mute by process id.
     App {
         pid: u32,
@@ -362,12 +380,25 @@ fn audio(cmd: &AudioCmd) -> Result<()> {
         }
         AudioCmd::Default { device, comms } => {
             let e = audio::find(None, device)?;
-            audio::set_default(&e.id, if *comms { Role::Communications } else { Role::Default })?;
+            audio::set_default(
+                &e.id,
+                if *comms {
+                    Role::Communications
+                } else {
+                    Role::Default
+                },
+            )?;
             let now = audio::find(None, &e.id)?;
-            println!("{}: default = {}, calls = {}", now.name, now.is_default, now.is_default_comms);
+            println!(
+                "{}: default = {}, calls = {}",
+                now.name, now.is_default, now.is_default_comms
+            );
         }
         AudioCmd::Spatial => {
-            for e in audio::endpoints()?.into_iter().filter(|e| e.flow == Flow::Output) {
+            for e in audio::endpoints()?
+                .into_iter()
+                .filter(|e| e.flow == Flow::Output)
+            {
                 match audio::spatial(&e.id) {
                     Ok(s) => println!(
                         "{}
@@ -379,14 +410,66 @@ fn audio(cmd: &AudioCmd) -> Result<()> {
                         s.active.as_deref().unwrap_or("off"),
                         s.available.join(", ")
                     ),
-                    Err(err) => println!("{}
-    {err:#}", e.name),
+                    Err(err) => println!(
+                        "{}
+    {err:#}",
+                        e.name
+                    ),
                 }
             }
         }
+        AudioCmd::SpatialSet { device, format } => {
+            let e = audio::find(Some(Flow::Output), device)?;
+            audio::set_spatial(&e.id, Some(format.as_str()))?;
+            let st = audio::spatial(&e.id)?;
+            println!(
+                "{}: selected {}, active {}",
+                e.name,
+                st.selected.as_deref().unwrap_or("off"),
+                st.active.as_deref().unwrap_or("off")
+            );
+        }
+        AudioCmd::Options { device } => {
+            let e = audio::find(None, device)?;
+            let o = audio::device_options(&e.id)?;
+            println!("{} ({} channels)", e.name, o.channels);
+            println!("  format:       {}", o.format.map_or("unknown".into(), |f| f.to_string()));
+            println!(
+                "  supported:    {}",
+                o.formats.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(" | ")
+            );
+            println!(
+                "  enhancements: {}",
+                o.enhancements.map_or("not available", |on| if on { "on" } else { "off" })
+            );
+            println!("  exclusive:    allowed {}, priority {}", o.exclusive_allowed, o.exclusive_priority);
+        }
+        AudioCmd::Format { device, rate, bits } => {
+            let e = audio::find(None, device)?;
+            audio::set_device_format(&e.id, audio::SampleFormat { rate: *rate, bits: *bits })?;
+            let o = audio::device_options(&e.id)?;
+            println!("{}: {}", e.name, o.format.map_or("unknown".into(), |f| f.to_string()));
+        }
+        AudioCmd::Enhancements { device, state } => {
+            let e = audio::find(None, device)?;
+            audio::set_enhancements(&e.id, state.on())?;
+            println!("{}: enhancements {:?}", e.name, audio::device_options(&e.id)?.enhancements);
+        }
+        AudioCmd::Exclusive { device, state, priority } => {
+            let e = audio::find(None, device)?;
+            audio::set_exclusive(&e.id, Some(state.on()), priority.map(|p| p.on()))?;
+            let o = audio::device_options(&e.id)?;
+            println!("{}: exclusive allowed {}, priority {}", e.name, o.exclusive_allowed, o.exclusive_priority);
+        }
         AudioCmd::Apps => {
             for s in audio::sessions()? {
-                println!("{:>6}  {:3.0}%{}  {}", s.pid, s.volume * 100.0, if s.muted { " muted" } else { "" }, s.app);
+                println!(
+                    "{:>6}  {:3.0}%{}  {}",
+                    s.pid,
+                    s.volume * 100.0,
+                    if s.muted { " muted" } else { "" },
+                    s.app
+                );
             }
         }
         AudioCmd::App { pid, volume, mute } => {

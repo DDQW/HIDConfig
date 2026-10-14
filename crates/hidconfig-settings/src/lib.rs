@@ -664,7 +664,11 @@ impl Watcher {
                 mic_muted: e.mic_muted().ok(),
             }
         });
-        self.status = Status { viper, earbuds, windows: hidconfig_win::read().ok() };
+        self.status = Status {
+            viper,
+            earbuds,
+            windows: hidconfig_win::read().ok(),
+        };
     }
 }
 

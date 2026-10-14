@@ -85,10 +85,15 @@ fn run(rx: Receiver<Cmd>, publish: impl Fn(Snapshot)) {
             Ok(Cmd::WinRestore) => {
                 let r = watcher
                     .update_config(|c| c.windows = Default::default(), &mut on_event)
-                    .and_then(|()| hidconfig_win::restore(&hidconfig_settings::windows_backup_path()?));
+                    .and_then(|()| {
+                        hidconfig_win::restore(&hidconfig_settings::windows_backup_path()?)
+                    });
                 match r {
                     Ok(_) => on_event(Event::Applied(hidconfig_settings::Target::Windows)),
-                    Err(e) => on_event(Event::Failed(hidconfig_settings::Target::Windows, format!("restore: {e:#}"))),
+                    Err(e) => on_event(Event::Failed(
+                        hidconfig_settings::Target::Windows,
+                        format!("restore: {e:#}"),
+                    )),
                 }
                 watcher.refresh_status_soon();
                 watcher.tick(&mut on_event);
