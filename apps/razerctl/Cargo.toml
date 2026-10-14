@@ -1,0 +1,9 @@
+[package]
+name = "razerctl"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+hidapi = "2.6.7"
+razer-proto = { version = "0.1.0", path = "../../crates/razer-proto" }
