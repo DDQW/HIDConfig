@@ -71,8 +71,14 @@ pub fn open_all(api: &HidApi) -> Vec<Result<Device>> {
 
 impl Device {
     fn open(api: &HidApi, info: &DeviceInfo, model: &'static Model) -> Result<Self> {
-        let hid = info.open_device(api).with_context(|| format!("opening {}", model.name))?;
-        Ok(Device { model, path: info.path().to_string_lossy().into_owned(), hid })
+        let hid = info
+            .open_device(api)
+            .with_context(|| format!("opening {}", model.name))?;
+        Ok(Device {
+            model,
+            path: info.path().to_string_lossy().into_owned(),
+            hid,
+        })
     }
 
     pub fn supports(&self, f: Feature) -> bool {
@@ -94,11 +100,16 @@ impl Device {
         buf[1..].copy_from_slice(&req.to_bytes());
         let mut last_foreign = None;
         'send: for _ in 0..5 {
-            self.hid.send_feature_report(&buf).context("send_feature_report")?;
+            self.hid
+                .send_feature_report(&buf)
+                .context("send_feature_report")?;
             for _ in 0..20 {
                 thread::sleep(Duration::from_millis(5));
                 let mut resp = [0u8; REPORT_LEN + 1];
-                let n = self.hid.get_feature_report(&mut resp).context("get_feature_report")?;
+                let n = self
+                    .hid
+                    .get_feature_report(&mut resp)
+                    .context("get_feature_report")?;
                 if n < REPORT_LEN {
                     bail!("short feature report ({n} bytes)");
                 }
@@ -116,7 +127,9 @@ impl Device {
             }
             bail!("device stayed busy");
         }
-        bail!("response slot kept being taken by another client (last: {last_foreign:?}); is Synapse running?")
+        bail!(
+            "response slot kept being taken by another client (last: {last_foreign:?}); is Synapse running?"
+        )
     }
 
     pub fn firmware(&self) -> Result<(u8, u8)> {
@@ -126,11 +139,17 @@ impl Device {
 
     pub fn serial(&self) -> Result<String> {
         let r = self.transact(&standard::get_serial(self.txn()))?;
-        Ok(r.args[..22].iter().take_while(|&&c| c != 0).map(|&c| c as char).collect())
+        Ok(r.args[..22]
+            .iter()
+            .take_while(|&&c| c != 0)
+            .map(|&c| c as char)
+            .collect())
     }
 
     pub fn dpi(&self) -> Result<(u16, u16)> {
-        Ok(mouse::parse_dpi(&self.transact(&mouse::get_dpi(self.txn()))?))
+        Ok(mouse::parse_dpi(
+            &self.transact(&mouse::get_dpi(self.txn()))?,
+        ))
     }
 
     pub fn set_dpi(&self, x: u16, y: u16) -> Result<()> {
@@ -148,13 +167,18 @@ impl Device {
     }
 
     pub fn set_polling_rate(&self, hz: u16) -> Result<()> {
-        let req = mouse::set_polling_rate(self.txn(), hz).context("rate must be 125, 500 or 1000")?;
+        let req =
+            mouse::set_polling_rate(self.txn(), hz).context("rate must be 125, 500 or 1000")?;
         self.transact(&req)?;
         Ok(())
     }
 
     pub fn set_logo_effect(&self, effect: Effect) -> Result<()> {
-        self.transact(&razer_proto::extended::set_effect(self.txn(), led::LOGO, effect))?;
+        self.transact(&razer_proto::extended::set_effect(
+            self.txn(),
+            led::LOGO,
+            effect,
+        ))?;
         Ok(())
     }
 
@@ -165,22 +189,36 @@ impl Device {
 
     pub fn set_dpi_stages(&self, s: &mouse::DpiStages) -> Result<()> {
         let max = self.model.max_dpi;
-        if s.stages.iter().any(|&(x, y)| !(100..=max).contains(&x) || !(100..=max).contains(&y)) {
+        if s.stages
+            .iter()
+            .any(|&(x, y)| !(100..=max).contains(&x) || !(100..=max).contains(&y))
+        {
             bail!("stage DPI must be 100..={max}");
         }
-        let req = mouse::set_dpi_stages(self.txn(), s)
-            .with_context(|| format!("need 1..={} stages and a valid active stage", mouse::MAX_DPI_STAGES))?;
+        let req = mouse::set_dpi_stages(self.txn(), s).with_context(|| {
+            format!(
+                "need 1..={} stages and a valid active stage",
+                mouse::MAX_DPI_STAGES
+            )
+        })?;
         self.transact(&req)?;
         Ok(())
     }
 
     pub fn logo_brightness(&self) -> Result<u8> {
-        let r = self.transact(&razer_proto::extended::get_brightness(self.txn(), led::LOGO))?;
+        let r = self.transact(&razer_proto::extended::get_brightness(
+            self.txn(),
+            led::LOGO,
+        ))?;
         Ok(razer_proto::extended::parse_brightness(&r))
     }
 
     pub fn set_logo_brightness(&self, b: u8) -> Result<()> {
-        self.transact(&razer_proto::extended::set_brightness(self.txn(), led::LOGO, b))?;
+        self.transact(&razer_proto::extended::set_brightness(
+            self.txn(),
+            led::LOGO,
+            b,
+        ))?;
         Ok(())
     }
 }

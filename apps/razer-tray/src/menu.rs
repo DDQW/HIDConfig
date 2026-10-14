@@ -6,7 +6,9 @@ use tray_icon::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuI
 
 use crate::worker::Snapshot;
 
-pub const DPI_PRESETS: &[u16] = &[400, 800, 1200, 1600, 1800, 2400, 3200, 4000, 6400, 8000, 12000, 16000];
+pub const DPI_PRESETS: &[u16] = &[
+    400, 800, 1200, 1600, 1800, 2400, 3200, 4000, 6400, 8000, 12000, 16000,
+];
 pub const POLL_RATES: &[u16] = &[125, 500, 1000];
 pub const LOGO_EFFECTS: &[(LogoEffect, &str)] = &[
     (LogoEffect::Off, "Off"),
@@ -25,15 +27,24 @@ pub const COLORS: &[(&str, &str)] = &[
     ("ffffff", "White"),
 ];
 /// (brightness byte, label)
-pub const BRIGHTNESS: &[(u8, &str)] =
-    &[(0, "Off"), (64, "25 %"), (128, "50 %"), (191, "75 %"), (255, "100 %")];
+pub const BRIGHTNESS: &[(u8, &str)] = &[
+    (0, "Off"),
+    (64, "25 %"),
+    (128, "50 %"),
+    (191, "75 %"),
+    (255, "100 %"),
+];
 pub const NOISE: &[(NoiseControl, &str)] = &[
     (NoiseControl::Off, "Off"),
     (NoiseControl::Anc, "ANC"),
     (NoiseControl::Ambient, "Ambient"),
 ];
-pub const EQS: &[(Eq, &str)] =
-    &[(Eq::Game, "Game"), (Eq::Music, "Music"), (Eq::Movie, "Movie"), (Eq::Flat, "Flat")];
+pub const EQS: &[(Eq, &str)] = &[
+    (Eq::Game, "Game"),
+    (Eq::Music, "Music"),
+    (Eq::Movie, "Movie"),
+    (Eq::Flat, "Flat"),
+];
 /// Power-saving timeout in minutes; 0 = power saving off.
 pub const POWER: &[u16] = &[0, 5, 15, 30, 45, 60];
 
@@ -47,8 +58,13 @@ pub enum Toggle {
 }
 
 impl Toggle {
-    pub const ALL: [Toggle; 5] =
-        [Toggle::ReduceCalls, Toggle::Dnd, Toggle::AutoPause, Toggle::Gestures, Toggle::Prompts];
+    pub const ALL: [Toggle; 5] = [
+        Toggle::ReduceCalls,
+        Toggle::Dnd,
+        Toggle::AutoPause,
+        Toggle::Gestures,
+        Toggle::Prompts,
+    ];
 
     pub fn key(self) -> &'static str {
         match self {
@@ -141,29 +157,49 @@ fn submenu(text: &str, items: &[&CheckMenuItem]) -> Result<Submenu> {
 impl TrayMenu {
     pub fn build(autostart: bool) -> Result<Self> {
         let viper_header = MenuItem::new("Razer Viper", false, None);
-        let dpi: Vec<_> =
-            DPI_PRESETS.iter().map(|&d| (d, check(format!("dpi:{d}"), &d.to_string()))).collect();
+        let dpi: Vec<_> = DPI_PRESETS
+            .iter()
+            .map(|&d| (d, check(format!("dpi:{d}"), &d.to_string())))
+            .collect();
         let stages: Vec<_> = (1..=razer_proto::mouse::MAX_DPI_STAGES)
             .map(|n| check(format!("stage:{n}"), &format!("Stage {n}")))
             .collect();
-        let poll: Vec<_> =
-            POLL_RATES.iter().map(|&h| (h, check(format!("poll:{h}"), &format!("{h} Hz")))).collect();
+        let poll: Vec<_> = POLL_RATES
+            .iter()
+            .map(|&h| (h, check(format!("poll:{h}"), &format!("{h} Hz"))))
+            .collect();
         let logo: Vec<_> = LOGO_EFFECTS
             .iter()
             .map(|&(e, l)| (e, check(format!("logo:{}", l.to_lowercase()), l)))
             .collect();
-        let colors: Vec<_> =
-            COLORS.iter().map(|&(hex, l)| (hex, check(format!("color:{hex}"), l))).collect();
-        let bright: Vec<_> =
-            BRIGHTNESS.iter().map(|&(b, l)| (b, check(format!("bright:{b}"), l))).collect();
+        let colors: Vec<_> = COLORS
+            .iter()
+            .map(|&(hex, l)| (hex, check(format!("color:{hex}"), l)))
+            .collect();
+        let bright: Vec<_> = BRIGHTNESS
+            .iter()
+            .map(|&(b, l)| (b, check(format!("bright:{b}"), l)))
+            .collect();
 
         let viper_subs = vec![
             submenu("DPI", &dpi.iter().map(|(_, i)| i).collect::<Vec<_>>())?,
             submenu("DPI stage", &stages.iter().collect::<Vec<_>>())?,
-            submenu("Polling rate", &poll.iter().map(|(_, i)| i).collect::<Vec<_>>())?,
-            submenu("Logo effect", &logo.iter().map(|(_, i)| i).collect::<Vec<_>>())?,
-            submenu("Logo colour", &colors.iter().map(|(_, i)| i).collect::<Vec<_>>())?,
-            submenu("Logo brightness", &bright.iter().map(|(_, i)| i).collect::<Vec<_>>())?,
+            submenu(
+                "Polling rate",
+                &poll.iter().map(|(_, i)| i).collect::<Vec<_>>(),
+            )?,
+            submenu(
+                "Logo effect",
+                &logo.iter().map(|(_, i)| i).collect::<Vec<_>>(),
+            )?,
+            submenu(
+                "Logo colour",
+                &colors.iter().map(|(_, i)| i).collect::<Vec<_>>(),
+            )?,
+            submenu(
+                "Logo brightness",
+                &bright.iter().map(|(_, i)| i).collect::<Vec<_>>(),
+            )?,
         ];
 
         let buds_header = MenuItem::new("Hammerhead V3 HyperSpeed", false, None);
@@ -171,27 +207,45 @@ impl TrayMenu {
             .iter()
             .map(|&(n, l)| (n, check(format!("anc:{}", l.to_lowercase()), l)))
             .collect();
-        let eq: Vec<_> =
-            EQS.iter().map(|&(e, l)| (e, check(format!("eq:{}", l.to_lowercase()), l))).collect();
+        let eq: Vec<_> = EQS
+            .iter()
+            .map(|&(e, l)| (e, check(format!("eq:{}", l.to_lowercase()), l)))
+            .collect();
         let power: Vec<_> = POWER
             .iter()
             .map(|&m| {
-                let label = if m == 0 { "Off".to_string() } else { format!("After {m} min") };
+                let label = if m == 0 {
+                    "Off".to_string()
+                } else {
+                    format!("After {m} min")
+                };
                 (m, check(format!("power:{m}"), &label))
             })
             .collect();
-        let toggles: Vec<_> =
-            Toggle::ALL.iter().map(|&t| (t, check(format!("toggle:{}", t.key()), t.label()))).collect();
+        let toggles: Vec<_> = Toggle::ALL
+            .iter()
+            .map(|&t| (t, check(format!("toggle:{}", t.key()), t.label())))
+            .collect();
         let mic = check("mic".into(), "Microphone on");
         let buds_subs = vec![
-            submenu("Noise control", &noise.iter().map(|(_, i)| i).collect::<Vec<_>>())?,
+            submenu(
+                "Noise control",
+                &noise.iter().map(|(_, i)| i).collect::<Vec<_>>(),
+            )?,
             submenu("EQ preset", &eq.iter().map(|(_, i)| i).collect::<Vec<_>>())?,
-            submenu("Power saving", &power.iter().map(|(_, i)| i).collect::<Vec<_>>())?,
-            submenu("Options", &toggles.iter().map(|(_, i)| i).collect::<Vec<_>>())?,
+            submenu(
+                "Power saving",
+                &power.iter().map(|(_, i)| i).collect::<Vec<_>>(),
+            )?,
+            submenu(
+                "Options",
+                &toggles.iter().map(|(_, i)| i).collect::<Vec<_>>(),
+            )?,
         ];
 
         let settings = MenuItem::with_id("settings", "Settings…", true, None);
-        let autostart_item = CheckMenuItem::with_id("autostart", "Start with Windows", true, autostart, None);
+        let autostart_item =
+            CheckMenuItem::with_id("autostart", "Start with Windows", true, autostart, None);
         let open_config = MenuItem::with_id("config", "Open config file", true, None);
         let quit = MenuItem::with_id("quit", "Quit", true, None);
 
@@ -237,7 +291,10 @@ impl TrayMenu {
     pub fn update(&self, s: &Snapshot, autostart: bool) {
         let v = &s.status.viper;
         let cv = &s.config.viper;
-        let st = v.as_ref().and_then(|v| v.stages.clone()).or_else(|| cv.stages());
+        let st = v
+            .as_ref()
+            .and_then(|v| v.stages.clone())
+            .or_else(|| cv.stages());
         self.viper_header.set_text(match v {
             Some(v) => {
                 let dpi = if v.dpi == v.dpi_y {
@@ -250,14 +307,26 @@ impl TrayMenu {
                     let &(x, y) = st.stages.get((st.active as usize).checked_sub(1)?)?;
                     (x == v.dpi && y == v.dpi_y).then(|| format!(" (stage {})", st.active))
                 });
-                format!("{} · {dpi} DPI{} · {} Hz", v.name, stage.unwrap_or_default(), v.polling_hz)
+                format!(
+                    "{} · {dpi} DPI{} · {} Hz",
+                    v.name,
+                    stage.unwrap_or_default(),
+                    v.polling_hz
+                )
             }
             None => "Razer Viper (not connected)".into(),
         });
         for (i, item) in self.stages.iter().enumerate() {
-            match st.as_ref().and_then(|st| st.stages.get(i).map(|&s| (st.active, s))) {
+            match st
+                .as_ref()
+                .and_then(|st| st.stages.get(i).map(|&s| (st.active, s)))
+            {
                 Some((active, (x, y))) => {
-                    let dpi = if x == y { x.to_string() } else { format!("{x}×{y}") };
+                    let dpi = if x == y {
+                        x.to_string()
+                    } else {
+                        format!("{x}×{y}")
+                    };
                     item.set_text(format!("Stage {}: {dpi}", i + 1));
                     item.set_enabled(true);
                     item.set_checked(active as usize == i + 1);
@@ -322,14 +391,19 @@ impl TrayMenu {
             i.set_checked(t.get(ce) == Some(true));
         }
         self.mic.set_enabled(live);
-        self.mic.set_checked(es.and_then(|e| e.mic_muted) == Some(false));
+        self.mic
+            .set_checked(es.and_then(|e| e.mic_muted) == Some(false));
         self.autostart.set_checked(autostart);
     }
 
     /// Turns a clicked item id into an action. Check items have already toggled
     /// themselves, so their state is the requested one.
     /// `stages`: what the device last reported, for when the config has none.
-    pub fn action(&self, id: &str, stages: Option<razer_proto::mouse::DpiStages>) -> Option<Action> {
+    pub fn action(
+        &self,
+        id: &str,
+        stages: Option<razer_proto::mouse::DpiStages>,
+    ) -> Option<Action> {
         let (kind, arg) = id.split_once(':').unwrap_or((id, ""));
         let edit = |f: Box<dyn FnOnce(&mut Config) + Send>| Some(Action::Edit(f));
         match kind {
@@ -359,13 +433,20 @@ impl TrayMenu {
                 edit(Box::new(move |c| c.viper.polling_hz = Some(h)))
             }
             "logo" => {
-                let effect = LOGO_EFFECTS.iter().find(|(_, l)| l.eq_ignore_ascii_case(arg))?.0;
+                let effect = LOGO_EFFECTS
+                    .iter()
+                    .find(|(_, l)| l.eq_ignore_ascii_case(arg))?
+                    .0;
                 edit(Box::new(move |c| {
                     let color = c.viper.logo.as_ref().and_then(|l| l.color.clone());
                     let needs_color = matches!(effect, LogoEffect::Static | LogoEffect::Breathing);
                     c.viper.logo = Some(Logo {
                         effect,
-                        color: if needs_color { color.or(Some(COLORS[0].0.into())) } else { color },
+                        color: if needs_color {
+                            color.or(Some(COLORS[0].0.into()))
+                        } else {
+                            color
+                        },
                     });
                 }))
             }
@@ -377,7 +458,10 @@ impl TrayMenu {
                         Some(LogoEffect::Breathing) => LogoEffect::Breathing,
                         _ => LogoEffect::Static,
                     };
-                    c.viper.logo = Some(Logo { effect, color: Some(hex) });
+                    c.viper.logo = Some(Logo {
+                        effect,
+                        color: Some(hex),
+                    });
                 }))
             }
             "bright" => {

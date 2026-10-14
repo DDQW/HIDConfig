@@ -219,10 +219,16 @@ pub mod mouse {
         let stages = (0..n)
             .map(|i| {
                 let e = &r.args[3 + i * 7..3 + i * 7 + 7];
-                (u16::from_be_bytes([e[1], e[2]]), u16::from_be_bytes([e[3], e[4]]))
+                (
+                    u16::from_be_bytes([e[1], e[2]]),
+                    u16::from_be_bytes([e[3], e[4]]),
+                )
             })
             .collect::<Vec<_>>();
-        (n > 0).then_some(DpiStages { active: r.args[1], stages })
+        (n > 0).then_some(DpiStages {
+            active: r.args[1],
+            stages,
+        })
     }
 
     pub fn get_polling_rate(txn: u8) -> Report {
@@ -353,12 +359,20 @@ pub mod hyperspeed {
         Some(Frame {
             status: f[1],
             seq: f[2],
-            msg: Message { cmd: f[7], sub: f[8], data: f[9..9 + n].to_vec() },
+            msg: Message {
+                cmd: f[7],
+                sub: f[8],
+                data: f[9..9 + n].to_vec(),
+            },
         })
     }
 
     fn msg(cmd: u8, sub: u8, data: &[u8]) -> Message {
-        Message { cmd, sub, data: data.to_vec() }
+        Message {
+            cmd,
+            sub,
+            data: data.to_vec(),
+        }
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -482,7 +496,9 @@ pub mod hyperspeed {
         use super::*;
 
         fn hex(s: &str) -> Vec<u8> {
-            s.split_whitespace().map(|b| u8::from_str_radix(b, 16).unwrap()).collect()
+            s.split_whitespace()
+                .map(|b| u8::from_str_radix(b, 16).unwrap())
+                .collect()
         }
 
         fn frame(head: &str, crc: u8) -> [u8; FRAME_LEN] {
@@ -497,10 +513,25 @@ pub mod hyperspeed {
         #[test]
         fn requests_match_synapse() {
             let cases: &[(u8, Message, &str, u8)] = &[
-                (0x6a, req::connection(), "02 00 6a 00 00 00 01 18 9a 01", 0x82),
+                (
+                    0x6a,
+                    req::connection(),
+                    "02 00 6a 00 00 00 01 18 9a 01",
+                    0x82,
+                ),
                 (0x6b, req::get_anc(), "02 00 6b 00 00 00 01 18 86 01", 0x9e),
-                (0x6c, req::set_anc(Anc::Off, 0x0a), "02 00 6c 00 00 00 03 18 06 01 00 0a", 0x16),
-                (0x6e, req::set_anc(Anc::On, 0x0a), "02 00 6e 00 00 00 03 18 06 01 01 0a", 0x17),
+                (
+                    0x6c,
+                    req::set_anc(Anc::Off, 0x0a),
+                    "02 00 6c 00 00 00 03 18 06 01 00 0a",
+                    0x16,
+                ),
+                (
+                    0x6e,
+                    req::set_anc(Anc::On, 0x0a),
+                    "02 00 6e 00 00 00 03 18 06 01 01 0a",
+                    0x17,
+                ),
             ];
             for (seq, m, head, crc) in cases {
                 assert_eq!(request(*seq, m), frame(head, *crc), "{m:?}");
@@ -544,7 +575,10 @@ mod tests {
     #[test]
     fn set_dpi_bytes() {
         let b = mouse::set_dpi(0x1f, 1600, 800).to_bytes();
-        assert_eq!(&b[5..15], &[0x07, 0x04, 0x05, 0x01, 0x06, 0x40, 0x03, 0x20, 0, 0]);
+        assert_eq!(
+            &b[5..15],
+            &[0x07, 0x04, 0x05, 0x01, 0x06, 0x40, 0x03, 0x20, 0, 0]
+        );
     }
 
     /// Reply captured from the Viper: re-encoding it must give the same argument bytes.
@@ -558,11 +592,29 @@ mod tests {
         let reply = Report::new(0x1f, 0x04, 0x86, 0x26).with_args(&raw);
         let s = mouse::parse_dpi_stages(&reply).unwrap();
         assert_eq!(s.active, 3);
-        assert_eq!(s.stages, vec![(400, 400), (800, 800), (1800, 1800), (2400, 2400), (3200, 3200)]);
+        assert_eq!(
+            s.stages,
+            vec![
+                (400, 400),
+                (800, 800),
+                (1800, 1800),
+                (2400, 2400),
+                (3200, 3200)
+            ]
+        );
         let set = mouse::set_dpi_stages(0x1f, &s).unwrap();
         assert_eq!((set.command_id, set.data_size), (0x06, 0x26));
         assert_eq!(&set.args[..raw.len()], &raw);
-        assert!(mouse::set_dpi_stages(0x1f, &mouse::DpiStages { active: 6, stages: s.stages }).is_none());
+        assert!(
+            mouse::set_dpi_stages(
+                0x1f,
+                &mouse::DpiStages {
+                    active: 6,
+                    stages: s.stages
+                }
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -571,7 +623,9 @@ mod tests {
             .to_bytes();
         assert_eq!(
             &b[5..17],
-            &[0x09, 0x0f, 0x02, 0x01, 0x04, 0x01, 0, 0, 0x01, 0xff, 0x10, 0x00]
+            &[
+                0x09, 0x0f, 0x02, 0x01, 0x04, 0x01, 0, 0, 0x01, 0xff, 0x10, 0x00
+            ]
         );
     }
 

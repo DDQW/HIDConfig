@@ -32,34 +32,47 @@ pub struct Battery {
 impl Battery {
     fn from_bytes(l: u8, r: u8) -> Self {
         let pct = |b: u8| (b != 0xff).then_some(b);
-        Battery { left: pct(l), right: pct(r) }
+        Battery {
+            left: pct(l),
+            right: pct(r),
+        }
     }
 }
 
 impl Earbuds {
     pub fn open(api: &HidApi) -> Result<Option<Self>> {
-        let Some(info) = api
-            .device_list()
-            .find(|d| d.vendor_id() == RAZER_VID && d.product_id() == PID && d.usage_page() == USAGE_PAGE)
-        else {
+        let Some(info) = api.device_list().find(|d| {
+            d.vendor_id() == RAZER_VID && d.product_id() == PID && d.usage_page() == USAGE_PAGE
+        }) else {
             return Ok(None);
         };
-        let hid = info.open_device(api).context("opening Hammerhead V3 HyperSpeed")?;
+        let hid = info
+            .open_device(api)
+            .context("opening Hammerhead V3 HyperSpeed")?;
         // Start somewhere other than where Synapse would, in case it is still running.
         let start = *SEQ_RANGE.start() + (std::process::id() % 31) as u8;
-        Ok(Some(Earbuds { hid, seq: Cell::new(start) }))
+        Ok(Some(Earbuds {
+            hid,
+            seq: Cell::new(start),
+        }))
     }
 
     fn next_seq(&self) -> u8 {
         let s = self.seq.get();
-        self.seq.set(if s >= *SEQ_RANGE.end() { *SEQ_RANGE.start() } else { s + 1 });
+        self.seq.set(if s >= *SEQ_RANGE.end() {
+            *SEQ_RANGE.start()
+        } else {
+            s + 1
+        });
         s
     }
 
     fn read_frame(&self) -> Result<Option<Frame>> {
         let mut f = [0u8; FRAME_LEN];
         f[0] = hyperspeed::REPORT_ID;
-        self.hid.get_feature_report(&mut f).context("GET_FEATURE 0x02")?;
+        self.hid
+            .get_feature_report(&mut f)
+            .context("GET_FEATURE 0x02")?;
         Ok(hyperspeed::decode(&f))
     }
 
@@ -73,19 +86,29 @@ impl Earbuds {
         let deadline = Instant::now() + Duration::from_millis(1500);
         while Instant::now() < deadline {
             thread::sleep(Duration::from_millis(60));
-            let Some(f) = self.read_frame()? else { continue };
+            let Some(f) = self.read_frame()? else {
+                continue;
+            };
             if f.status == STATUS_PUSH || f.seq != seq {
                 continue;
             }
             if f.msg.cmd != m.cmd || f.msg.sub != m.sub {
-                bail!("reply for seq {seq:#04x} has cmd {:02x} {:02x}", f.msg.cmd, f.msg.sub);
+                bail!(
+                    "reply for seq {seq:#04x} has cmd {:02x} {:02x}",
+                    f.msg.cmd,
+                    f.msg.sub
+                );
             }
             if f.status != STATUS_OK {
                 bail!("device returned status {:#04x} for {m:02x?}", f.status);
             }
             return Ok(f.msg.data);
         }
-        bail!("no reply to {:02x} {:02x} (are the earbuds out of the case?)", m.cmd, m.sub)
+        bail!(
+            "no reply to {:02x} {:02x} (are the earbuds out of the case?)",
+            m.cmd,
+            m.sub
+        )
     }
 
     /// Reply data after the echoed selector bytes of a get request.

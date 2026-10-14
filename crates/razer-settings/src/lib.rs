@@ -15,8 +15,8 @@ use razer_hid::{
 };
 use razer_proto::{
     extended::Effect,
-    mouse::DpiStages,
     hyperspeed::{Anc, EqPreset},
+    mouse::DpiStages,
 };
 use serde::{Deserialize, Serialize};
 
@@ -64,7 +64,11 @@ impl StageDpi {
     }
 
     pub fn from_xy((x, y): (u16, u16)) -> Self {
-        if x == y { StageDpi::Same(x) } else { StageDpi::Xy([x, y]) }
+        if x == y {
+            StageDpi::Same(x)
+        } else {
+            StageDpi::Xy([x, y])
+        }
     }
 }
 
@@ -72,7 +76,10 @@ impl Viper {
     /// Stages in device form, if configured.
     pub fn stages(&self) -> Option<DpiStages> {
         let stages: Vec<_> = self.dpi_stages.as_ref()?.iter().map(|s| s.xy()).collect();
-        Some(DpiStages { active: self.dpi_stage.unwrap_or(1), stages })
+        Some(DpiStages {
+            active: self.dpi_stage.unwrap_or(1),
+            stages,
+        })
     }
 }
 
@@ -173,7 +180,9 @@ impl Logo {
 
 pub fn path() -> Result<PathBuf> {
     let appdata = std::env::var_os("APPDATA").context("APPDATA is not set")?;
-    Ok(PathBuf::from(appdata).join("openrazer-win").join("config.toml"))
+    Ok(PathBuf::from(appdata)
+        .join("openrazer-win")
+        .join("config.toml"))
 }
 
 impl Config {
@@ -277,7 +286,11 @@ pub fn apply_earbuds(e: &Earbuds, cfg: &EarbudsCfg) -> Result<()> {
 }
 
 fn finish(errors: Vec<String>) -> Result<()> {
-    if errors.is_empty() { Ok(()) } else { bail!(errors.join("; ")) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        bail!(errors.join("; "))
+    }
 }
 
 /// Reads what the devices can report into a config. The logo effect, EQ, auto-pause,
@@ -534,7 +547,10 @@ impl Watcher {
         }
 
         if let Err(e) = self.api.refresh_devices() {
-            on_event(Event::Failed(Target::Viper, format!("enumerating HID devices: {e}")));
+            on_event(Event::Failed(
+                Target::Viper,
+                format!("enumerating HID devices: {e}"),
+            ));
         }
         if let Some(t) = trigger {
             on_event(Event::Reapplying(t));
@@ -569,17 +585,21 @@ impl Watcher {
     }
 
     fn refresh_status(&mut self) {
-        let viper = razer_hid::open_all(&self.api).into_iter().flatten().next().and_then(|d| {
-            let (dpi, dpi_y) = d.dpi().ok()?;
-            Some(ViperStatus {
-                name: d.model.name,
-                dpi,
-                dpi_y,
-                stages: d.dpi_stages().ok(),
-                polling_hz: d.polling_rate().ok()?,
-                brightness: d.logo_brightness().ok()?,
-            })
-        });
+        let viper = razer_hid::open_all(&self.api)
+            .into_iter()
+            .flatten()
+            .next()
+            .and_then(|d| {
+                let (dpi, dpi_y) = d.dpi().ok()?;
+                Some(ViperStatus {
+                    name: d.model.name,
+                    dpi,
+                    dpi_y,
+                    stages: d.dpi_stages().ok(),
+                    polling_hz: d.polling_rate().ok()?,
+                    brightness: d.logo_brightness().ok()?,
+                })
+            });
         let earbuds = Earbuds::open(&self.api).ok().flatten().map(|e| {
             if !connected(&e) {
                 return EarbudsStatus::default();
@@ -614,7 +634,10 @@ pub fn watch(mut on_event: impl FnMut(Event), mut keep_going: impl FnMut() -> bo
 }
 
 fn mtime() -> Option<SystemTime> {
-    path().ok().and_then(|p| std::fs::metadata(p).ok()).and_then(|m| m.modified().ok())
+    path()
+        .ok()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok())
 }
 
 #[cfg(test)]
@@ -639,13 +662,22 @@ eq = "flat"
 power_saving_minutes = 15
 "#;
         let c: Config = toml::from_str(src).unwrap();
-        let st: Config = toml::from_str("[viper]
+        let st: Config = toml::from_str(
+            "[viper]
 dpi_stages = [400, [1600, 1200]]
-dpi_stage = 2").unwrap();
-        assert_eq!(st.viper.stages().unwrap().stages, vec![(400, 400), (1600, 1200)]);
+dpi_stage = 2",
+        )
+        .unwrap();
+        assert_eq!(
+            st.viper.stages().unwrap().stages,
+            vec![(400, 400), (1600, 1200)]
+        );
         assert_eq!(st.viper.stages().unwrap().active, 2);
         assert_eq!(c.viper.dpi, Some(1800));
-        assert_eq!(c.viper.logo.as_ref().unwrap().effect().unwrap(), Effect::Static([0xff, 0, 0]));
+        assert_eq!(
+            c.viper.logo.as_ref().unwrap().effect().unwrap(),
+            Effect::Static([0xff, 0, 0])
+        );
         assert_eq!(c.earbuds.noise_control, Some(NoiseControl::Ambient));
         assert_eq!(c.earbuds.gestures, None);
         let back: Config = toml::from_str(&toml::to_string_pretty(&c).unwrap()).unwrap();

@@ -85,7 +85,9 @@ fn main() -> Result<()> {
         Cmd::Watch => return watch(),
         _ => {}
     }
-    let devices: Vec<Device> = razer_hid::open_all(&api).into_iter().collect::<Result<_>>()?;
+    let devices: Vec<Device> = razer_hid::open_all(&api)
+        .into_iter()
+        .collect::<Result<_>>()?;
     if devices.is_empty() {
         bail!("no supported Razer device found");
     }
@@ -119,7 +121,11 @@ fn run(dev: &Device, cmd: &Cmd) -> Result<()> {
                 .enumerate()
                 .map(|(i, &(x, y))| {
                     let mark = if i + 1 == st.active as usize { "*" } else { "" };
-                    if x == y { format!("{mark}{x}") } else { format!("{mark}{x}x{y}") }
+                    if x == y {
+                        format!("{mark}{x}")
+                    } else {
+                        format!("{mark}{x}x{y}")
+                    }
                 })
                 .collect();
             println!("  dpi stages: {}  (* = active)", list.join(" "));
@@ -130,10 +136,16 @@ fn run(dev: &Device, cmd: &Cmd) -> Result<()> {
             println!("{}: dpi now {rx} x {ry}", dev.model.name);
         }
         Cmd::Stages { ref dpi, active } => {
-            let stages = dpi.iter().map(|s| parse_xy(s)).collect::<Result<Vec<_>>>()?;
+            let stages = dpi
+                .iter()
+                .map(|s| parse_xy(s))
+                .collect::<Result<Vec<_>>>()?;
             dev.set_dpi_stages(&razer_proto::mouse::DpiStages { active, stages })?;
             let st = dev.dpi_stages()?;
-            println!("{}: stages now {:?}, active {}", dev.model.name, st.stages, st.active);
+            println!(
+                "{}: stages now {:?}, active {}",
+                dev.model.name, st.stages, st.active
+            );
             let (x, y) = dev.dpi()?;
             println!("{}: current dpi {x} x {y}", dev.model.name);
         }
@@ -154,7 +166,11 @@ fn run(dev: &Device, cmd: &Cmd) -> Result<()> {
         }
         Cmd::Brightness { value } => {
             dev.set_logo_brightness(value)?;
-            println!("{}: brightness now {}", dev.model.name, dev.logo_brightness()?);
+            println!(
+                "{}: brightness now {}",
+                dev.model.name,
+                dev.logo_brightness()?
+            );
         }
     }
     Ok(())
@@ -202,14 +218,22 @@ fn apply(api: &HidApi) -> Result<()> {
 }
 
 fn watch() -> Result<()> {
-    println!("watching (config: {}), Ctrl-C to stop", razer_settings::path()?.display());
+    println!(
+        "watching (config: {}), Ctrl-C to stop",
+        razer_settings::path()?.display()
+    );
     razer_settings::watch(
         |ev| {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() % 86400)
                 .unwrap_or(0);
-            println!("[{:02}:{:02}:{:02} UTC] {ev:?}", now / 3600, now / 60 % 60, now % 60);
+            println!(
+                "[{:02}:{:02}:{:02} UTC] {ev:?}",
+                now / 3600,
+                now / 60 % 60,
+                now % 60
+            );
         },
         || true,
     )
@@ -217,13 +241,31 @@ fn watch() -> Result<()> {
 
 fn descriptor(api: &HidApi, pid: &str) -> Result<()> {
     let pid = u16::from_str_radix(pid.trim_start_matches("0x"), 16).context("pid must be hex")?;
-    for d in api.device_list().filter(|d| d.vendor_id() == RAZER_VID && d.product_id() == pid) {
-        println!("if={} usage_page={:04x} usage={:04x}", d.interface_number(), d.usage_page(), d.usage());
+    for d in api
+        .device_list()
+        .filter(|d| d.vendor_id() == RAZER_VID && d.product_id() == pid)
+    {
+        println!(
+            "if={} usage_page={:04x} usage={:04x}",
+            d.interface_number(),
+            d.usage_page(),
+            d.usage()
+        );
         let mut buf = [0u8; razer_hid::hidapi::MAX_REPORT_DESCRIPTOR_SIZE];
-        match d.open_device(api).and_then(|h| h.get_report_descriptor(&mut buf)) {
+        match d
+            .open_device(api)
+            .and_then(|h| h.get_report_descriptor(&mut buf))
+        {
             Ok(n) => {
                 for chunk in buf[..n].chunks(16) {
-                    println!("    {}", chunk.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "));
+                    println!(
+                        "    {}",
+                        chunk
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    );
                 }
             }
             Err(e) => println!("    error: {e}"),
@@ -233,7 +275,10 @@ fn descriptor(api: &HidApi, pid: &str) -> Result<()> {
 }
 
 fn hex(b: &[u8]) -> String {
-    b.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
+    b.iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 const GUIDED_STEPS: &[&str] = &[
@@ -257,8 +302,12 @@ fn listen(api: &HidApi, pid: &str, secs: u64, guided: bool) -> Result<()> {
     };
     let pid = u16::from_str_radix(pid.trim_start_matches("0x"), 16).context("pid must be hex")?;
     std::fs::create_dir_all("captures")?;
-    let log_path = format!("captures/{pid:04x}-{}.log", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?.as_secs());
+    let log_path = format!(
+        "captures/{pid:04x}-{}.log",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs()
+    );
     let mut log = std::fs::File::create(&log_path)?;
     let mut out = |line: String| {
         println!("{line}");
@@ -266,7 +315,10 @@ fn listen(api: &HidApi, pid: &str, secs: u64, guided: bool) -> Result<()> {
     };
 
     let mut open = Vec::new();
-    for d in api.device_list().filter(|d| d.vendor_id() == RAZER_VID && d.product_id() == pid) {
+    for d in api
+        .device_list()
+        .filter(|d| d.vendor_id() == RAZER_VID && d.product_id() == pid)
+    {
         let tag = format!("{:04x}/{:04x}", d.usage_page(), d.usage());
         match d.open_device(api) {
             Ok(h) => {
@@ -323,7 +375,11 @@ fn listen(api: &HidApi, pid: &str, secs: u64, guided: bool) -> Result<()> {
         }
         if rx.try_recv().is_ok() {
             let t = start.elapsed().as_secs_f32();
-            out(format!("{t:6.1}s ---- DONE step {}: {}", step + 1, GUIDED_STEPS[step]));
+            out(format!(
+                "{t:6.1}s ---- DONE step {}: {}",
+                step + 1,
+                GUIDED_STEPS[step]
+            ));
             dump_features(&mut out);
             step += 1;
             if step == GUIDED_STEPS.len() {
@@ -397,13 +453,23 @@ fn earbuds(api: &HidApi, cmd: &EarbudsCmd) -> Result<()> {
         EarbudsCmd::Info => {
             let pct = |p: Option<u8>| p.map_or("not connected".into(), |p| format!("{p}%"));
             match e.battery() {
-                Ok(b) => println!("battery:       left {}, right {}", pct(b.left), pct(b.right)),
+                Ok(b) => println!(
+                    "battery:       left {}, right {}",
+                    pct(b.left),
+                    pct(b.right)
+                ),
                 Err(err) => println!("battery:       {err:#}"),
             }
             println!("connection:    {:02x?}", e.connection()?);
             let (mode, calls) = e.anc()?;
-            println!("noise control: {mode:?} (reduce during BT calls: {})", onoff(calls == 0x01));
-            println!("mic:           {}", if e.mic_muted()? { "off (muted)" } else { "on" });
+            println!(
+                "noise control: {mode:?} (reduce during BT calls: {})",
+                onoff(calls == 0x01)
+            );
+            println!(
+                "mic:           {}",
+                if e.mic_muted()? { "off (muted)" } else { "on" }
+            );
             println!("dnd (gaming):  {}", onoff(e.dnd()?));
             println!(
                 "power saving:  {}, after {} min",
@@ -474,7 +540,11 @@ fn list(api: &HidApi) -> Result<()> {
             d.usage_page(),
             d.usage(),
             d.product_string().unwrap_or(""),
-            if razer_hid::model(d.product_id()).is_some() { " [supported]" } else { "" }
+            if razer_hid::model(d.product_id()).is_some() {
+                " [supported]"
+            } else {
+                ""
+            }
         );
     }
     Ok(())

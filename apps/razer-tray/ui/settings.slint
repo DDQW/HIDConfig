@@ -161,18 +161,12 @@ component Placeholder inherits Text {
     wrap: word-wrap;
 }
 
-export component SettingsWindow inherits Window {
-    title: "openrazer-win";
-    preferred-width: 600px;
-    preferred-height: 820px;
-    min-width: 460px;
-    min-height: 300px;
-    background: Palette.background;
-
+// Everything the window shows and reports; Rust talks to this global.
+export global AppState {
     // ---- Viper ----
-    in property <bool> viper-present;
-    in property <string> viper-name: "Razer Viper";
-    in property <int> max-dpi: 16000;
+    in-out property <bool> viper-present;
+    in-out property <string> viper-name: "Razer Viper";
+    in-out property <int> max-dpi: 16000;
     in-out property <int> dpi: 800;
     in-out property <int> dpi-y: 800;
     in-out property <bool> xy-separate;
@@ -195,10 +189,10 @@ export component SettingsWindow inherits Window {
     callback logo-changed(int, string);
 
     // ---- Earbuds ----
-    in property <bool> dongle-present;
-    in property <bool> buds-connected;
-    in property <int> battery-left: -1;
-    in property <int> battery-right: -1;
+    in-out property <bool> dongle-present;
+    in-out property <bool> buds-connected;
+    in-out property <int> battery-left: -1;
+    in-out property <int> battery-right: -1;
     in-out property <int> anc-index;            // off, anc, ambient; -1 unknown
     in-out property <int> eq-index: -1;         // game, music, movie, flat; -1 not set
     in-out property <int> timeout-index: -1;    // off, 5, 15, 30, 45, 60 min
@@ -209,9 +203,9 @@ export component SettingsWindow inherits Window {
     in-out property <bool> gestures;
     in-out property <bool> prompts;
     // Settings the devices can't report, still unknown until set here once.
-    in property <bool> auto-pause-known;
-    in property <bool> gestures-known;
-    in property <bool> prompts-known;
+    in-out property <bool> auto-pause-known;
+    in-out property <bool> gestures-known;
+    in-out property <bool> prompts-known;
 
     callback anc-changed(int);
     callback eq-changed(int);
@@ -220,370 +214,411 @@ export component SettingsWindow inherits Window {
     callback toggle-changed(string, bool);
 
     // ---- App ----
-    in property <string> config-path;
-    in property <string> last-event;
+    in-out property <string> config-path;
+    in-out property <string> last-event;
     in-out property <bool> autostart;
     callback autostart-changed(bool);
     callback open-config();
 
-    private property <[string]> polling-names: ["125 Hz", "500 Hz", "1000 Hz"];
+    out property <[string]> polling-names: ["125 Hz", "500 Hz", "1000 Hz"];
+}
+
+component ViperCard inherits VerticalLayout {
+    Card {
+        title: AppState.viper-name;
+        status: AppState.viper-present ? "Connected" : "Not connected";
+        status-tint: AppState.viper-present ? Theme.ok : Theme.muted;
+        summary: !AppState.viper-present ? ""
+            : (AppState.xy-separate && AppState.dpi != AppState.dpi-y
+                ? AppState.dpi + "×" + AppState.dpi-y : AppState.dpi)
+            + " DPI · " + (AppState.polling-index >= 0 ? AppState.polling-names[AppState.polling-index] : "");
+
+        if !AppState.viper-present: Placeholder {
+            text: "Plug in the mouse; saved settings are applied automatically.";
+        }
+
+        if AppState.viper-present: VerticalLayout {
+            spacing: 10px;
+
+            WideRow {
+                label: AppState.xy-separate ? "DPI X" : "DPI";
+                Slider {
+                    property <int> source: AppState.dpi;
+                    changed source => { self.value = self.source; }
+                    minimum: 100;
+                    maximum: AppState.max-dpi;
+                    value: AppState.dpi;
+                    step: 50;
+                    released(v) => {
+                        AppState.dpi = round(v / 50) * 50;
+                        AppState.dpi-changed(AppState.dpi, AppState.xy-separate ? AppState.dpi-y : AppState.dpi);
+                    }
+                }
+                DpiSpin {
+                    source: AppState.dpi;
+                    max-dpi: AppState.max-dpi;
+                    edited(v) => {
+                        AppState.dpi = v;
+                        AppState.dpi-changed(v, AppState.xy-separate ? AppState.dpi-y : v);
+                    }
+                }
+            }
+            if AppState.xy-separate: WideRow {
+                label: "DPI Y";
+                Slider {
+                    property <int> source: AppState.dpi-y;
+                    changed source => { self.value = self.source; }
+                    minimum: 100;
+                    maximum: AppState.max-dpi;
+                    value: AppState.dpi-y;
+                    step: 50;
+                    released(v) => {
+                        AppState.dpi-y = round(v / 50) * 50;
+                        AppState.dpi-changed(AppState.dpi, AppState.dpi-y);
+                    }
+                }
+                DpiSpin {
+                    source: AppState.dpi-y;
+                    max-dpi: AppState.max-dpi;
+                    edited(v) => {
+                        AppState.dpi-y = v;
+                        AppState.dpi-changed(AppState.dpi, v);
+                    }
+                }
+            }
+            Row {
+                label: "Separate X / Y";
+                Switch { checked <=> AppState.xy-separate; }
+            }
+
+            Rectangle { height: 1px; background: Palette.border; }
+
+            Row {
+                label: "DPI stages";
+                hint: "Cycled by the button under the mouse";
+                ComboBox {
+                    width: 80px;
+                    model: ["1", "2", "3", "4", "5"];
+                    current-index <=> AppState.stage-count-index;
+                    selected => { AppState.stage-count-changed(self.current-index + 1); }
+                }
+            }
+            for st[i] in AppState.stages: Row {
+                label: "Stage " + (i + 1);
+                DpiSpin {
+                    source: st.x;
+                    max-dpi: AppState.max-dpi;
+                    edited(v) => {
+                        AppState.stages[i] = { x: v, y: AppState.xy-separate ? st.y : v };
+                        AppState.stages-dirty = true;
+                    }
+                }
+                if AppState.xy-separate: DpiSpin {
+                    source: st.y;
+                    max-dpi: AppState.max-dpi;
+                    edited(v) => {
+                        AppState.stages[i] = { x: st.x, y: v };
+                        AppState.stages-dirty = true;
+                    }
+                }
+                if i + 1 == AppState.active-stage: VerticalLayout {
+                    alignment: center;
+                    Chip {
+                        text: "Active";
+                        tint: Theme.ok;
+                    }
+                }
+                if i + 1 != AppState.active-stage: Button {
+                    text: "Make active";
+                    clicked => {
+                        AppState.active-stage = i + 1;
+                        AppState.stages-dirty = true;
+                    }
+                }
+            }
+            if AppState.stages-dirty: HorizontalLayout {
+                alignment: end;
+                spacing: 8px;
+                Text {
+                    text: "Unsaved stage changes";
+                    color: Theme.muted;
+                    vertical-alignment: center;
+                }
+                Button {
+                    text: "Revert";
+                    clicked => { AppState.stages-revert(); }
+                }
+                Button {
+                    text: "Apply stages";
+                    primary: true;
+                    clicked => { AppState.stages-apply(); }
+                }
+            }
+
+            Rectangle { height: 1px; background: Palette.border; }
+
+            Row {
+                label: "Polling rate";
+                ComboBox {
+                    width: Theme.combo-width;
+                    model: AppState.polling-names;
+                    current-index <=> AppState.polling-index;
+                    selected => { AppState.polling-changed(self.current-index); }
+                }
+            }
+            Row {
+                label: "Logo effect";
+                ComboBox {
+                    width: Theme.combo-width;
+                    model: ["Off", "Static", "Breathing", "Spectrum"];
+                    current-index <=> AppState.logo-effect-index;
+                    selected => { AppState.logo-changed(self.current-index, AppState.logo-color); }
+                }
+            }
+            Row {
+                label: "Logo colour";
+                for c in [
+                    { hex: "44d62c", col: #44d62c },
+                    { hex: "ff0000", col: #ff0000 },
+                    { hex: "ff7a00", col: #ff7a00 },
+                    { hex: "ffd400", col: #ffd400 },
+                    { hex: "00c8ff", col: #00c8ff },
+                    { hex: "0040ff", col: #0040ff },
+                    { hex: "a020f0", col: #a020f0 },
+                    { hex: "ffffff", col: #ffffff },
+                ]: VerticalLayout {
+                    alignment: center;
+                    Swatch {
+                        swatch: c.col;
+                        selected: AppState.logo-color == c.hex;
+                        clicked => {
+                            AppState.logo-color = c.hex;
+                            if (AppState.logo-effect-index == 0 || AppState.logo-effect-index == 3) {
+                                AppState.logo-effect-index = 1;
+                            }
+                            AppState.logo-changed(AppState.logo-effect-index, c.hex);
+                        }
+                    }
+                }
+                LineEdit {
+                    property <string> source: AppState.logo-color;
+                    changed source => { self.text = self.source; }
+                    width: 96px;
+                    text: AppState.logo-color;
+                    placeholder-text: "RRGGBB";
+                    accepted(t) => {
+                        AppState.logo-color = t;
+                        AppState.logo-changed(AppState.logo-effect-index, t);
+                    }
+                }
+            }
+            WideRow {
+                label: "Logo brightness";
+                Slider {
+                    property <int> source: AppState.brightness;
+                    changed source => { self.value = self.source; }
+                    minimum: 0;
+                    maximum: 255;
+                    value: AppState.brightness;
+                    released(v) => {
+                        AppState.brightness = round(v);
+                        AppState.brightness-changed(AppState.brightness);
+                    }
+                }
+                Text {
+                    width: 44px;
+                    text: round(AppState.brightness * 100 / 255) + "%";
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                }
+            }
+        }
+    }
+
+}
+
+component BudsCard inherits VerticalLayout {
+    Card {
+        title: "Hammerhead V3 HyperSpeed";
+        status: !AppState.dongle-present ? "Dongle not connected"
+            : AppState.buds-connected ? "Connected" : "In case or asleep";
+        status-tint: AppState.buds-connected ? Theme.ok : Theme.muted;
+
+        if !AppState.dongle-present: Placeholder {
+            text: "Plug in the HyperSpeed dongle.";
+        }
+        if AppState.dongle-present && !AppState.buds-connected: Placeholder {
+            text: "Take the earbuds out of the case (or tap one to wake it). Settings are applied once they connect.";
+        }
+
+        if AppState.dongle-present && AppState.buds-connected: VerticalLayout {
+            spacing: 10px;
+            Row {
+                label: "Battery";
+                BatteryBar { side: "L"; percent: AppState.battery-left; }
+                BatteryBar { side: "R"; percent: AppState.battery-right; }
+            }
+            Row {
+                label: "Noise control";
+                ComboBox {
+                    width: Theme.combo-width;
+                    model: ["Off", "ANC", "Ambient"];
+                    current-index <=> AppState.anc-index;
+                    selected => { AppState.anc-changed(self.current-index); }
+                }
+            }
+            Row {
+                label: "EQ preset";
+                ComboBox {
+                    width: Theme.combo-width;
+                    model: ["Game", "Music", "Movie", "Flat"];
+                    current-index <=> AppState.eq-index;
+                    selected => { AppState.eq-changed(self.current-index); }
+                }
+            }
+            Row {
+                label: "Power saving";
+                hint: "Turn off when idle";
+                ComboBox {
+                    width: Theme.combo-width;
+                    model: ["Off", "After 5 min", "After 15 min", "After 30 min", "After 45 min", "After 60 min"];
+                    current-index <=> AppState.timeout-index;
+                    selected => { AppState.timeout-changed(self.current-index); }
+                }
+            }
+
+            Rectangle { height: 1px; background: Palette.border; }
+
+            Row {
+                label: "Microphone";
+                Switch {
+                    checked <=> AppState.mic-on;
+                    toggled => { AppState.mic-changed(self.checked); }
+                }
+            }
+            Row {
+                label: "Reduce ANC on calls";
+                hint: "Bluetooth calls only";
+                Switch {
+                    checked <=> AppState.reduce-calls;
+                    toggled => { AppState.toggle-changed("reduce-calls", self.checked); }
+                }
+            }
+            Row {
+                label: "Do not disturb";
+                hint: "While gaming on 2.4 GHz";
+                Switch {
+                    checked <=> AppState.dnd;
+                    toggled => { AppState.toggle-changed("dnd", self.checked); }
+                }
+            }
+            Row {
+                label: "Auto-pause";
+                hint: AppState.auto-pause-known ? "" : "Not reported by the earbuds";
+                Switch {
+                    checked <=> AppState.auto-pause;
+                    toggled => { AppState.toggle-changed("auto-pause", self.checked); }
+                }
+            }
+            Row {
+                label: "Touch gestures";
+                hint: AppState.gestures-known ? "" : "Not reported by the earbuds";
+                Switch {
+                    checked <=> AppState.gestures;
+                    toggled => { AppState.toggle-changed("gestures", self.checked); }
+                }
+            }
+            Row {
+                label: "Voice prompts";
+                hint: AppState.prompts-known ? "" : "Not reported by the earbuds";
+                Switch {
+                    checked <=> AppState.prompts;
+                    toggled => { AppState.toggle-changed("prompts", self.checked); }
+                }
+            }
+        }
+    }
+
+}
+
+component AppCard inherits VerticalLayout {
+    Card {
+        title: "App";
+        Row {
+            label: "Start with Windows";
+            Switch {
+                checked <=> AppState.autostart;
+                toggled => { AppState.autostart-changed(self.checked); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            Text {
+                width: Theme.label-width;
+                text: "Config file";
+                vertical-alignment: center;
+            }
+            Text {
+                horizontal-stretch: 1;
+                text: AppState.config-path;
+                color: Theme.muted;
+                font-size: 11px;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+            Button {
+                text: "Open";
+                clicked => { AppState.open-config(); }
+            }
+        }
+    }
+}
+
+export component SettingsWindow inherits Window {
+    title: "openrazer-win";
+    preferred-width: 600px;
+    preferred-height: 820px;
+    min-width: 460px;
+    min-height: 300px;
+    background: Palette.background;
+
+    // Two columns once there is room for two readable cards side by side.
+    private property <bool> wide: self.width >= 1080px;
 
     VerticalLayout {
         ScrollView {
             vertical-stretch: 1;
-            HorizontalLayout {
-                alignment: center;
-                VerticalLayout {
-                    max-width: 640px;
-                    min-width: 420px;
-                    horizontal-stretch: 1;
+            VerticalLayout {
+                if root.wide: HorizontalLayout {
+                    alignment: center;
                     padding: 20px;
                     spacing: 16px;
-
-                    // ---------------- Viper ----------------
-                    Card {
-                        title: root.viper-name;
-                        status: root.viper-present ? "Connected" : "Not connected";
-                        status-tint: root.viper-present ? Theme.ok : Theme.muted;
-                        summary: !root.viper-present ? ""
-                            : (root.xy-separate && root.dpi != root.dpi-y
-                                ? root.dpi + "×" + root.dpi-y : root.dpi)
-                            + " DPI · " + (root.polling-index >= 0 ? root.polling-names[root.polling-index] : "");
-
-                        if !root.viper-present: Placeholder {
-                            text: "Plug in the mouse; saved settings are applied automatically.";
-                        }
-
-                        if root.viper-present: VerticalLayout {
-                            spacing: 10px;
-
-                            WideRow {
-                                label: root.xy-separate ? "DPI X" : "DPI";
-                                Slider {
-                                    property <int> source: root.dpi;
-                                    changed source => { self.value = self.source; }
-                                    minimum: 100;
-                                    maximum: root.max-dpi;
-                                    value: root.dpi;
-                                    step: 50;
-                                    released(v) => {
-                                        root.dpi = round(v / 50) * 50;
-                                        root.dpi-changed(root.dpi, root.xy-separate ? root.dpi-y : root.dpi);
-                                    }
-                                }
-                                DpiSpin {
-                                    source: root.dpi;
-                                    max-dpi: root.max-dpi;
-                                    edited(v) => {
-                                        root.dpi = v;
-                                        root.dpi-changed(v, root.xy-separate ? root.dpi-y : v);
-                                    }
-                                }
-                            }
-                            if root.xy-separate: WideRow {
-                                label: "DPI Y";
-                                Slider {
-                                    property <int> source: root.dpi-y;
-                                    changed source => { self.value = self.source; }
-                                    minimum: 100;
-                                    maximum: root.max-dpi;
-                                    value: root.dpi-y;
-                                    step: 50;
-                                    released(v) => {
-                                        root.dpi-y = round(v / 50) * 50;
-                                        root.dpi-changed(root.dpi, root.dpi-y);
-                                    }
-                                }
-                                DpiSpin {
-                                    source: root.dpi-y;
-                                    max-dpi: root.max-dpi;
-                                    edited(v) => {
-                                        root.dpi-y = v;
-                                        root.dpi-changed(root.dpi, v);
-                                    }
-                                }
-                            }
-                            Row {
-                                label: "Separate X / Y";
-                                Switch { checked <=> root.xy-separate; }
-                            }
-
-                            Rectangle { height: 1px; background: Palette.border; }
-
-                            Row {
-                                label: "DPI stages";
-                                hint: "Cycled by the button under the mouse";
-                                ComboBox {
-                                    width: 80px;
-                                    model: ["1", "2", "3", "4", "5"];
-                                    current-index <=> root.stage-count-index;
-                                    selected => { root.stage-count-changed(self.current-index + 1); }
-                                }
-                            }
-                            for st[i] in root.stages: Row {
-                                label: "Stage " + (i + 1);
-                                DpiSpin {
-                                    source: st.x;
-                                    max-dpi: root.max-dpi;
-                                    edited(v) => {
-                                        root.stages[i] = { x: v, y: root.xy-separate ? st.y : v };
-                                        root.stages-dirty = true;
-                                    }
-                                }
-                                if root.xy-separate: DpiSpin {
-                                    source: st.y;
-                                    max-dpi: root.max-dpi;
-                                    edited(v) => {
-                                        root.stages[i] = { x: st.x, y: v };
-                                        root.stages-dirty = true;
-                                    }
-                                }
-                                if i + 1 == root.active-stage: VerticalLayout {
-                                    alignment: center;
-                                    Chip {
-                                        text: "Active";
-                                        tint: Theme.ok;
-                                    }
-                                }
-                                if i + 1 != root.active-stage: Button {
-                                    text: "Make active";
-                                    clicked => {
-                                        root.active-stage = i + 1;
-                                        root.stages-dirty = true;
-                                    }
-                                }
-                            }
-                            if root.stages-dirty: HorizontalLayout {
-                                alignment: end;
-                                spacing: 8px;
-                                Text {
-                                    text: "Unsaved stage changes";
-                                    color: Theme.muted;
-                                    vertical-alignment: center;
-                                }
-                                Button {
-                                    text: "Revert";
-                                    clicked => { root.stages-revert(); }
-                                }
-                                Button {
-                                    text: "Apply stages";
-                                    primary: true;
-                                    clicked => { root.stages-apply(); }
-                                }
-                            }
-
-                            Rectangle { height: 1px; background: Palette.border; }
-
-                            Row {
-                                label: "Polling rate";
-                                ComboBox {
-                                    width: Theme.combo-width;
-                                    model: root.polling-names;
-                                    current-index <=> root.polling-index;
-                                    selected => { root.polling-changed(self.current-index); }
-                                }
-                            }
-                            Row {
-                                label: "Logo effect";
-                                ComboBox {
-                                    width: Theme.combo-width;
-                                    model: ["Off", "Static", "Breathing", "Spectrum"];
-                                    current-index <=> root.logo-effect-index;
-                                    selected => { root.logo-changed(self.current-index, root.logo-color); }
-                                }
-                            }
-                            Row {
-                                label: "Logo colour";
-                                for c in [
-                                    { hex: "44d62c", col: #44d62c },
-                                    { hex: "ff0000", col: #ff0000 },
-                                    { hex: "ff7a00", col: #ff7a00 },
-                                    { hex: "ffd400", col: #ffd400 },
-                                    { hex: "00c8ff", col: #00c8ff },
-                                    { hex: "0040ff", col: #0040ff },
-                                    { hex: "a020f0", col: #a020f0 },
-                                    { hex: "ffffff", col: #ffffff },
-                                ]: VerticalLayout {
-                                    alignment: center;
-                                    Swatch {
-                                        swatch: c.col;
-                                        selected: root.logo-color == c.hex;
-                                        clicked => {
-                                            root.logo-color = c.hex;
-                                            if (root.logo-effect-index == 0 || root.logo-effect-index == 3) {
-                                                root.logo-effect-index = 1;
-                                            }
-                                            root.logo-changed(root.logo-effect-index, c.hex);
-                                        }
-                                    }
-                                }
-                                LineEdit {
-                                    property <string> source: root.logo-color;
-                                    changed source => { self.text = self.source; }
-                                    width: 96px;
-                                    text: root.logo-color;
-                                    placeholder-text: "RRGGBB";
-                                    accepted(t) => {
-                                        root.logo-color = t;
-                                        root.logo-changed(root.logo-effect-index, t);
-                                    }
-                                }
-                            }
-                            WideRow {
-                                label: "Logo brightness";
-                                Slider {
-                                    property <int> source: root.brightness;
-                                    changed source => { self.value = self.source; }
-                                    minimum: 0;
-                                    maximum: 255;
-                                    value: root.brightness;
-                                    released(v) => {
-                                        root.brightness = round(v);
-                                        root.brightness-changed(root.brightness);
-                                    }
-                                }
-                                Text {
-                                    width: 44px;
-                                    text: round(root.brightness * 100 / 255) + "%";
-                                    vertical-alignment: center;
-                                    horizontal-alignment: right;
-                                }
-                            }
-                        }
+                    VerticalLayout {
+                        max-width: 640px;
+                        horizontal-stretch: 1;
+                        alignment: start;
+                        ViperCard { }
                     }
-
-                    // ---------------- Earbuds ----------------
-                    Card {
-                        title: "Hammerhead V3 HyperSpeed";
-                        status: !root.dongle-present ? "Dongle not connected"
-                            : root.buds-connected ? "Connected" : "In case or asleep";
-                        status-tint: root.buds-connected ? Theme.ok : Theme.muted;
-
-                        if !root.dongle-present: Placeholder {
-                            text: "Plug in the HyperSpeed dongle.";
-                        }
-                        if root.dongle-present && !root.buds-connected: Placeholder {
-                            text: "Take the earbuds out of the case (or tap one to wake it). Settings are applied once they connect.";
-                        }
-
-                        if root.dongle-present && root.buds-connected: VerticalLayout {
-                            spacing: 10px;
-                            Row {
-                                label: "Battery";
-                                BatteryBar { side: "L"; percent: root.battery-left; }
-                                BatteryBar { side: "R"; percent: root.battery-right; }
-                            }
-                            Row {
-                                label: "Noise control";
-                                ComboBox {
-                                    width: Theme.combo-width;
-                                    model: ["Off", "ANC", "Ambient"];
-                                    current-index <=> root.anc-index;
-                                    selected => { root.anc-changed(self.current-index); }
-                                }
-                            }
-                            Row {
-                                label: "EQ preset";
-                                ComboBox {
-                                    width: Theme.combo-width;
-                                    model: ["Game", "Music", "Movie", "Flat"];
-                                    current-index <=> root.eq-index;
-                                    selected => { root.eq-changed(self.current-index); }
-                                }
-                            }
-                            Row {
-                                label: "Power saving";
-                                hint: "Turn off when idle";
-                                ComboBox {
-                                    width: Theme.combo-width;
-                                    model: ["Off", "After 5 min", "After 15 min", "After 30 min", "After 45 min", "After 60 min"];
-                                    current-index <=> root.timeout-index;
-                                    selected => { root.timeout-changed(self.current-index); }
-                                }
-                            }
-
-                            Rectangle { height: 1px; background: Palette.border; }
-
-                            Row {
-                                label: "Microphone";
-                                Switch {
-                                    checked <=> root.mic-on;
-                                    toggled => { root.mic-changed(self.checked); }
-                                }
-                            }
-                            Row {
-                                label: "Reduce ANC on calls";
-                                hint: "Bluetooth calls only";
-                                Switch {
-                                    checked <=> root.reduce-calls;
-                                    toggled => { root.toggle-changed("reduce-calls", self.checked); }
-                                }
-                            }
-                            Row {
-                                label: "Do not disturb";
-                                hint: "While gaming on 2.4 GHz";
-                                Switch {
-                                    checked <=> root.dnd;
-                                    toggled => { root.toggle-changed("dnd", self.checked); }
-                                }
-                            }
-                            Row {
-                                label: "Auto-pause";
-                                hint: root.auto-pause-known ? "" : "Not reported by the earbuds";
-                                Switch {
-                                    checked <=> root.auto-pause;
-                                    toggled => { root.toggle-changed("auto-pause", self.checked); }
-                                }
-                            }
-                            Row {
-                                label: "Touch gestures";
-                                hint: root.gestures-known ? "" : "Not reported by the earbuds";
-                                Switch {
-                                    checked <=> root.gestures;
-                                    toggled => { root.toggle-changed("gestures", self.checked); }
-                                }
-                            }
-                            Row {
-                                label: "Voice prompts";
-                                hint: root.prompts-known ? "" : "Not reported by the earbuds";
-                                Switch {
-                                    checked <=> root.prompts;
-                                    toggled => { root.toggle-changed("prompts", self.checked); }
-                                }
-                            }
-                        }
+                    VerticalLayout {
+                        max-width: 640px;
+                        horizontal-stretch: 1;
+                        alignment: start;
+                        spacing: 16px;
+                        BudsCard { }
+                        AppCard { }
                     }
-
-                    // ---------------- App ----------------
-                    Card {
-                        title: "App";
-                        Row {
-                            label: "Start with Windows";
-                            Switch {
-                                checked <=> root.autostart;
-                                toggled => { root.autostart-changed(self.checked); }
-                            }
-                        }
-                        HorizontalLayout {
-                            spacing: 10px;
-                            Text {
-                                width: Theme.label-width;
-                                text: "Config file";
-                                vertical-alignment: center;
-                            }
-                            Text {
-                                horizontal-stretch: 1;
-                                text: root.config-path;
-                                color: Theme.muted;
-                                font-size: 11px;
-                                overflow: elide;
-                                vertical-alignment: center;
-                            }
-                            Button {
-                                text: "Open";
-                                clicked => { root.open-config(); }
-                            }
-                        }
+                }
+                if !root.wide: HorizontalLayout {
+                    alignment: center;
+                    VerticalLayout {
+                        max-width: 640px;
+                        min-width: 420px;
+                        horizontal-stretch: 1;
+                        padding: 20px;
+                        spacing: 16px;
+                        ViperCard { }
+                        BudsCard { }
+                        AppCard { }
                     }
                 }
             }
@@ -602,7 +637,7 @@ export component SettingsWindow inherits Window {
                 padding-left: 20px;
                 padding-right: 20px;
                 Text {
-                    text: root.last-event == "" ? "Ready" : root.last-event;
+                    text: AppState.last-event == "" ? "Ready" : AppState.last-event;
                     color: Theme.muted;
                     font-size: 11px;
                     overflow: elide;

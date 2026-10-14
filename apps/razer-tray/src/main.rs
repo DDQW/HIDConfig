@@ -11,8 +11,8 @@ use std::{cell::RefCell, sync::mpsc::Sender};
 
 use anyhow::Result;
 use razer_settings::{Eq, LogoEffect, NoiseControl, StageDpi, parse_rgb};
-use slint::Model;
 use slint::ComponentHandle;
+use slint::Model;
 use tray_icon::{
     MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent, menu::MenuEvent,
 };
@@ -73,8 +73,13 @@ fn run() -> Result<()> {
     });
 
     let ui = SettingsWindow::new()?;
-    ui.set_config_path(razer_settings::path().map(|p| p.display().to_string()).unwrap_or_default().into());
-    ui.set_autostart(autostart);
+    ui.global::<AppState>().set_config_path(
+        razer_settings::path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default()
+            .into(),
+    );
+    ui.global::<AppState>().set_autostart(autostart);
     wire_ui(&ui, &tx);
 
     MenuEvent::set_event_handler(Some(|ev: MenuEvent| {
@@ -84,8 +89,14 @@ fn run() -> Result<()> {
     TrayIconEvent::set_event_handler(Some(|ev: TrayIconEvent| {
         let open = matches!(
             ev,
-            TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }
-                | TrayIconEvent::DoubleClick { button: MouseButton::Left, .. }
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } | TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            }
         );
         if open {
             let _ = slint::invoke_from_event_loop(|| with_app(|app| app.show_settings()));
@@ -124,7 +135,7 @@ fn edit(tx: &Sender<Cmd>, f: impl FnOnce(&mut razer_settings::Config) + Send + '
 
 fn wire_ui(ui: &SettingsWindow, tx: &Sender<Cmd>) {
     let t = tx.clone();
-    ui.on_dpi_changed(move |x, y| {
+    ui.global::<AppState>().on_dpi_changed(move |x, y| {
         let x = x.clamp(100, 16000) as u16;
         let y = y.clamp(100, 16000) as u16;
         edit(&t, move |c| {
@@ -133,34 +144,42 @@ fn wire_ui(ui: &SettingsWindow, tx: &Sender<Cmd>) {
         });
     });
     let weak = ui.as_weak();
-    ui.on_stage_count_changed(move |n| {
+    ui.global::<AppState>().on_stage_count_changed(move |n| {
         let Some(ui) = weak.upgrade() else { return };
-        let mut stages: Vec<StageValue> = ui.get_stages().iter().collect();
+        let mut stages: Vec<StageValue> = ui.global::<AppState>().get_stages().iter().collect();
         let n = n.clamp(1, 5) as usize;
         while stages.len() < n {
-            let last = stages.last().cloned().unwrap_or(StageValue { x: 400, y: 400 });
+            let last = stages
+                .last()
+                .cloned()
+                .unwrap_or(StageValue { x: 400, y: 400 });
             let next = |v: i32| (v * 2).min(16000);
-            stages.push(StageValue { x: next(last.x), y: next(last.y) });
+            stages.push(StageValue {
+                x: next(last.x),
+                y: next(last.y),
+            });
         }
         stages.truncate(n);
-        ui.set_stages(slint::ModelRc::new(slint::VecModel::from(stages)));
-        if ui.get_active_stage() as usize > n {
-            ui.set_active_stage(n as i32);
+        ui.global::<AppState>()
+            .set_stages(slint::ModelRc::new(slint::VecModel::from(stages)));
+        if ui.global::<AppState>().get_active_stage() as usize > n {
+            ui.global::<AppState>().set_active_stage(n as i32);
         }
-        ui.set_stages_dirty(true);
+        ui.global::<AppState>().set_stages_dirty(true);
     });
-    ui.on_stages_revert(|| {
+    ui.global::<AppState>().on_stages_revert(|| {
         with_app(|app| {
-            app.ui.set_stages_dirty(false);
+            app.ui.global::<AppState>().set_stages_dirty(false);
             app.refresh();
         })
     });
     let weak = ui.as_weak();
     let t = tx.clone();
-    ui.on_stages_apply(move || {
+    ui.global::<AppState>().on_stages_apply(move || {
         let Some(ui) = weak.upgrade() else { return };
-        let xy = ui.get_xy_separate();
+        let xy = ui.global::<AppState>().get_xy_separate();
         let stages: Vec<StageDpi> = ui
+            .global::<AppState>()
             .get_stages()
             .iter()
             .map(|s| {
@@ -169,66 +188,76 @@ fn wire_ui(ui: &SettingsWindow, tx: &Sender<Cmd>) {
                 StageDpi::from_xy((x, y))
             })
             .collect();
-        let active = ui.get_active_stage().clamp(1, stages.len() as i32) as u8;
-        ui.set_stages_dirty(false);
+        let active = ui
+            .global::<AppState>()
+            .get_active_stage()
+            .clamp(1, stages.len() as i32) as u8;
+        ui.global::<AppState>().set_stages_dirty(false);
         edit(&t, move |c| set_stages(c, stages, active));
     });
     let t = tx.clone();
-    ui.on_polling_changed(move |i| {
+    ui.global::<AppState>().on_polling_changed(move |i| {
         if let Some(&hz) = POLL_RATES.get(i as usize) {
             edit(&t, move |c| c.viper.polling_hz = Some(hz));
         }
     });
     let t = tx.clone();
-    ui.on_brightness_changed(move |v| {
+    ui.global::<AppState>().on_brightness_changed(move |v| {
         let b = v.clamp(0, 255) as u8;
         edit(&t, move |c| c.viper.brightness = Some(b));
     });
     let t = tx.clone();
-    ui.on_logo_changed(move |i, hex| {
-        let Some(&(effect, _)) = LOGO_EFFECTS.get(i as usize) else { return };
+    ui.global::<AppState>().on_logo_changed(move |i, hex| {
+        let Some(&(effect, _)) = LOGO_EFFECTS.get(i as usize) else {
+            return;
+        };
         let hex = hex.trim().trim_start_matches('#').to_lowercase();
         if parse_rgb(&hex).is_err() {
             log(&format!("ignoring invalid colour {hex:?}"));
             return;
         }
-        edit(&t, move |c| c.viper.logo = Some(razer_settings::Logo { effect, color: Some(hex) }));
+        edit(&t, move |c| {
+            c.viper.logo = Some(razer_settings::Logo {
+                effect,
+                color: Some(hex),
+            })
+        });
     });
     let t = tx.clone();
-    ui.on_anc_changed(move |i| {
+    ui.global::<AppState>().on_anc_changed(move |i| {
         if let Some(&(n, _)) = NOISE.get(i as usize) {
             edit(&t, move |c| c.earbuds.noise_control = Some(n));
         }
     });
     let t = tx.clone();
-    ui.on_eq_changed(move |i| {
+    ui.global::<AppState>().on_eq_changed(move |i| {
         if let Some(&(e, _)) = EQS.get(i as usize) {
             edit(&t, move |c| c.earbuds.eq = Some(e));
         }
     });
     let t = tx.clone();
-    ui.on_timeout_changed(move |i| {
+    ui.global::<AppState>().on_timeout_changed(move |i| {
         if let Some(&m) = POWER.get(i as usize) {
             edit(&t, move |c| menu::set_power(&mut c.earbuds, m));
         }
     });
     let t = tx.clone();
-    ui.on_mic_changed(move |on| {
+    ui.global::<AppState>().on_mic_changed(move |on| {
         let _ = t.send(Cmd::MicOn(on));
     });
     let t = tx.clone();
-    ui.on_toggle_changed(move |key, on| {
+    ui.global::<AppState>().on_toggle_changed(move |key, on| {
         if let Some(toggle) = Toggle::from_key(&key) {
             edit(&t, move |c| toggle.set(&mut c.earbuds, on));
         }
     });
-    ui.on_autostart_changed(|on| {
+    ui.global::<AppState>().on_autostart_changed(|on| {
         if let Err(e) = platform::set_autostart(on) {
             log(&format!("autostart: {e:#}"));
         }
         with_app(|app| app.refresh());
     });
-    ui.on_open_config(|| {
+    ui.global::<AppState>().on_open_config(|| {
         if let Err(e) = platform::open_config() {
             log(&format!("open config: {e:#}"));
         }
@@ -243,7 +272,10 @@ impl App {
     }
 
     fn on_menu(&mut self, id: &str) {
-        let stages = self.snapshot.as_ref().and_then(|s| s.status.viper.as_ref()?.stages.clone());
+        let stages = self
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.status.viper.as_ref()?.stages.clone());
         match self.menu.action(id, stages) {
             Some(Action::Edit(f)) => {
                 let _ = self.tx.send(Cmd::Edit(f));
@@ -326,84 +358,116 @@ fn icon_state(s: &Snapshot) -> icon::State {
 }
 
 fn index_of<T: PartialEq>(items: &[(T, &str)], v: Option<T>) -> i32 {
-    v.and_then(|v| items.iter().position(|(x, _)| *x == v)).map_or(-1, |i| i as i32)
+    v.and_then(|v| items.iter().position(|(x, _)| *x == v))
+        .map_or(-1, |i| i as i32)
 }
 
 fn update_ui(ui: &SettingsWindow, s: &Snapshot, autostart: bool) {
     let v = s.status.viper.as_ref();
     let cv = &s.config.viper;
-    ui.set_viper_present(v.is_some());
+    ui.global::<AppState>().set_viper_present(v.is_some());
     if let Some(v) = v {
-        ui.set_viper_name(v.name.into());
+        ui.global::<AppState>().set_viper_name(v.name.into());
     }
     if let Some(d) = v.map(|v| v.dpi).or(cv.dpi) {
-        ui.set_dpi(d as i32);
+        ui.global::<AppState>().set_dpi(d as i32);
     }
     if let Some(d) = v.map(|v| v.dpi_y).or(cv.dpi_y).or(cv.dpi) {
-        ui.set_dpi_y(d as i32);
+        ui.global::<AppState>().set_dpi_y(d as i32);
     }
     // Keep stage edits in progress.
-    if !ui.get_stages_dirty() {
+    if !ui.global::<AppState>().get_stages_dirty() {
         let st = v.and_then(|v| v.stages.clone()).or_else(|| cv.stages());
         if let Some(st) = st {
             let differ = st.stages.iter().any(|&(x, y)| x != y);
-            let model: Vec<StageValue> =
-                st.stages.iter().map(|&(x, y)| StageValue { x: x as i32, y: y as i32 }).collect();
-            let current: Vec<StageValue> = ui.get_stages().iter().collect();
+            let model: Vec<StageValue> = st
+                .stages
+                .iter()
+                .map(|&(x, y)| StageValue {
+                    x: x as i32,
+                    y: y as i32,
+                })
+                .collect();
+            let current: Vec<StageValue> = ui.global::<AppState>().get_stages().iter().collect();
             if current != model {
-                ui.set_stages(slint::ModelRc::new(slint::VecModel::from(model)));
+                ui.global::<AppState>()
+                    .set_stages(slint::ModelRc::new(slint::VecModel::from(model)));
             }
-            ui.set_active_stage(st.active as i32);
-            ui.set_stage_count_index(st.stages.len() as i32 - 1);
+            ui.global::<AppState>().set_active_stage(st.active as i32);
+            ui.global::<AppState>()
+                .set_stage_count_index(st.stages.len() as i32 - 1);
             if differ {
-                ui.set_xy_separate(true);
+                ui.global::<AppState>().set_xy_separate(true);
             }
         }
     }
     if v.is_some_and(|v| v.dpi != v.dpi_y) {
-        ui.set_xy_separate(true);
+        ui.global::<AppState>().set_xy_separate(true);
     }
     if let Some(hz) = v.map(|v| v.polling_hz).or(cv.polling_hz) {
-        ui.set_polling_index(POLL_RATES.iter().position(|&h| h == hz).map_or(-1, |i| i as i32));
+        ui.global::<AppState>().set_polling_index(
+            POLL_RATES
+                .iter()
+                .position(|&h| h == hz)
+                .map_or(-1, |i| i as i32),
+        );
     }
     if let Some(b) = v.map(|v| v.brightness).or(cv.brightness) {
-        ui.set_brightness(b as i32);
+        ui.global::<AppState>().set_brightness(b as i32);
     }
     let effect: Option<LogoEffect> = cv.logo.as_ref().map(|l| l.effect);
-    ui.set_logo_effect_index(index_of(LOGO_EFFECTS, effect));
+    ui.global::<AppState>()
+        .set_logo_effect_index(index_of(LOGO_EFFECTS, effect));
     if let Some(c) = cv.logo.as_ref().and_then(|l| l.color.clone()) {
-        ui.set_logo_color(c.into());
+        ui.global::<AppState>().set_logo_color(c.into());
     }
 
     let e = s.status.earbuds.as_ref();
     let ce = &s.config.earbuds;
-    ui.set_dongle_present(e.is_some());
-    ui.set_buds_connected(e.is_some_and(|e| e.connected));
+    ui.global::<AppState>().set_dongle_present(e.is_some());
+    ui.global::<AppState>()
+        .set_buds_connected(e.is_some_and(|e| e.connected));
     let battery = e.filter(|e| e.connected).and_then(|e| e.battery);
     let pct = |p: Option<u8>| p.map_or(-1, i32::from);
-    ui.set_battery_left(pct(battery.and_then(|b| b.left)));
-    ui.set_battery_right(pct(battery.and_then(|b| b.right)));
+    ui.global::<AppState>()
+        .set_battery_left(pct(battery.and_then(|b| b.left)));
+    ui.global::<AppState>()
+        .set_battery_right(pct(battery.and_then(|b| b.right)));
     let noise: Option<NoiseControl> = e.and_then(|e| e.noise_control).or(ce.noise_control);
-    ui.set_anc_index(index_of(NOISE, noise));
+    ui.global::<AppState>()
+        .set_anc_index(index_of(NOISE, noise));
     let eq: Option<Eq> = ce.eq;
-    ui.set_eq_index(index_of(EQS, eq));
+    ui.global::<AppState>().set_eq_index(index_of(EQS, eq));
     let power = match ce.power_saving {
         Some(false) => Some(0),
         _ => ce.power_saving_minutes,
     };
-    ui.set_timeout_index(power.and_then(|m| POWER.iter().position(|&x| x == m)).map_or(-1, |i| i as i32));
+    ui.global::<AppState>().set_timeout_index(
+        power
+            .and_then(|m| POWER.iter().position(|&x| x == m))
+            .map_or(-1, |i| i as i32),
+    );
     if let Some(muted) = e.and_then(|e| e.mic_muted) {
-        ui.set_mic_on(!muted);
+        ui.global::<AppState>().set_mic_on(!muted);
     }
-    ui.set_reduce_calls(Toggle::ReduceCalls.get(ce) == Some(true));
-    ui.set_dnd(Toggle::Dnd.get(ce) == Some(true));
-    ui.set_auto_pause(Toggle::AutoPause.get(ce) == Some(true));
-    ui.set_gestures(Toggle::Gestures.get(ce) == Some(true));
-    ui.set_prompts(Toggle::Prompts.get(ce) == Some(true));
-    ui.set_auto_pause_known(ce.auto_pause.is_some());
-    ui.set_gestures_known(ce.gestures.is_some());
-    ui.set_prompts_known(ce.audio_prompts.is_some());
+    ui.global::<AppState>()
+        .set_reduce_calls(Toggle::ReduceCalls.get(ce) == Some(true));
+    ui.global::<AppState>()
+        .set_dnd(Toggle::Dnd.get(ce) == Some(true));
+    ui.global::<AppState>()
+        .set_auto_pause(Toggle::AutoPause.get(ce) == Some(true));
+    ui.global::<AppState>()
+        .set_gestures(Toggle::Gestures.get(ce) == Some(true));
+    ui.global::<AppState>()
+        .set_prompts(Toggle::Prompts.get(ce) == Some(true));
+    ui.global::<AppState>()
+        .set_auto_pause_known(ce.auto_pause.is_some());
+    ui.global::<AppState>()
+        .set_gestures_known(ce.gestures.is_some());
+    ui.global::<AppState>()
+        .set_prompts_known(ce.audio_prompts.is_some());
 
-    ui.set_autostart(autostart);
-    ui.set_last_event(s.last_event.clone().into());
+    ui.global::<AppState>().set_autostart(autostart);
+    ui.global::<AppState>()
+        .set_last_event(s.last_event.clone().into());
 }
