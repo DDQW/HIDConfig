@@ -897,7 +897,7 @@ pub fn set_vcp(device: &str, code: u8, value: u32) -> Result<()> {
     let expected = (value as f64 * ratio).round() as i64;
     if (expected - before as i64).abs() >= 2 {
         bail!(
-            "the monitor kept {} at {} - it's probably locked by a picture mode              (dynamic/advanced contrast, ECO, a game preset); turn that off in the monitor's menu",
+            "the monitor kept {} at {} - it's probably locked by a picture mode (dynamic/advanced contrast, ECO, a game preset); turn that off in the monitor's menu",
             control_name(code),
             to_menu(m, code, before, max)
         );

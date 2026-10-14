@@ -928,6 +928,20 @@ fn wire_graphics(ui: &SettingsWindow, tx: &Sender<Cmd>) {
     });
     let t = tx.clone();
     gs.on_set_profile(move |dev, index| {
+        // Ignore re-selections of what is already active (model refreshes).
+        let current = with_display(&dev, |x| {
+            let c = hidconfig_win::graphics::color_profiles(x.monitor_key.as_deref()?);
+            Some(if c.per_user {
+                c.default
+                    .and_then(|d| c.installed.iter().position(|p| p.eq_ignore_ascii_case(&d)))
+                    .map_or(-1, |i| i as i32)
+            } else {
+                -1
+            })
+        });
+        if current == Some(index) {
+            return;
+        }
         let Some((key, profile)) = with_display(&dev, |x| {
             let key = x.monitor_key.clone()?;
             let profile = (index >= 0)
@@ -1094,13 +1108,9 @@ fn update_display(ui: &SettingsWindow, s: &Snapshot) {
                 .monitor_key
                 .as_deref()
                 .map(hidconfig_win::graphics::color_profiles);
-            let mut profile_names = vec![match &cp {
-                Some(c) if !c.per_user => format!(
-                    "System default ({})",
-                    c.default.as_deref().unwrap_or("none")
-                ),
-                _ => "System default".to_string(),
-            }];
+            // A stable label: changing it would replace the combo's model, which
+            // resets the selection to the first entry and fires `selected`.
+            let mut profile_names = vec!["System default".to_string()];
             profile_names.extend(cp.iter().flat_map(|c| c.installed.clone()));
             let profile_index = match &cp {
                 Some(c) if c.per_user => c
