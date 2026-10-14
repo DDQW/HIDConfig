@@ -25,8 +25,11 @@ enum Cmd {
         #[arg(long)]
         guided: bool,
     },
-    /// Hammerhead V3 HyperSpeed: send one battery query to the dongle (experimental).
-    EarbudsBattery,
+    /// Hammerhead V3 HyperSpeed earbuds.
+    Earbuds {
+        #[command(subcommand)]
+        cmd: EarbudsCmd,
+    },
     /// Show firmware and current settings of supported devices.
     Info,
     /// Set DPI (one value for both axes, or X and Y).
@@ -58,7 +61,7 @@ fn main() -> Result<()> {
         Cmd::List => return list(&api),
         Cmd::Descriptor { pid } => return descriptor(&api, pid),
         Cmd::Listen { pid, secs, guided } => return listen(&api, pid, *secs, *guided),
-        Cmd::EarbudsBattery => return earbuds_battery(&api),
+        Cmd::Earbuds { cmd } => return earbuds(&api, cmd),
         _ => {}
     }
     let devices: Vec<Device> = razer_hid::open_all(&api).into_iter().collect::<Result<_>>()?;
@@ -73,7 +76,7 @@ fn main() -> Result<()> {
 
 fn run(dev: &Device, cmd: &Cmd) -> Result<()> {
     match *cmd {
-        Cmd::List | Cmd::Descriptor { .. } | Cmd::Listen { .. } | Cmd::EarbudsBattery => unreachable!(),
+        Cmd::List | Cmd::Descriptor { .. } | Cmd::Listen { .. } | Cmd::Earbuds { .. } => unreachable!(),
         Cmd::Info => {
             let (maj, min) = dev.firmware()?;
             let (x, y) = dev.dpi()?;
@@ -240,47 +243,133 @@ fn listen(api: &HidApi, pid: &str, secs: u64, guided: bool) -> Result<()> {
     println!("\nsaved to {log_path}");
     Ok(())
 }
-fn earbuds_battery(api: &HidApi) -> Result<()> {
-    use razer_proto::hyperspeed::{self, FRAME_LEN};
-    use std::time::{Duration, Instant};
-    let info = api
-        .device_list()
-        .find(|d| d.vendor_id() == RAZER_VID && d.product_id() == 0x0a61 && d.usage_page() == 0xff14)
-        .context("Hammerhead V3 HyperSpeed dongle not found")?;
-    let h = info.open_device(api)?;
-    h.set_blocking_mode(false)?;
-    let req = hyperspeed::encode(&hyperspeed::get_battery());
-    println!("send  : {}", hex(&req[..16]));
-    h.send_feature_report(&req).context("SET_FEATURE 0x02")?;
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(2) {
-        let mut f = [0u8; FRAME_LEN];
-        f[0] = hyperspeed::REPORT_ID;
-        if h.get_feature_report(&mut f).is_ok() && f[1..].iter().any(|&b| b != 0) {
-            let t = start.elapsed().as_millis();
-            match hyperspeed::decode(&f) {
-                Some(m) => println!("{t:4}ms reply: {m:02x?}"),
-                None => println!("{t:4}ms raw  : {}", hex(&f)),
-            }
-            if let Some(m) = hyperspeed::decode(&f)
-                && m.cmd == 0x07
-                && m.sub == 0x80
-                && m.data.len() >= 2
-            {
-                let pct = |b: u8| if b == 0xff { "n/a".to_string() } else { format!("{b}%") };
-                println!("battery: left {}, right {}", pct(m.data[0]), pct(m.data[1]));
-                return Ok(());
-            }
-        }
-        let mut buf = [0u8; 64];
-        if let Ok(n) = h.read(&mut buf)
-            && n > 0
-        {
-            println!("{:4}ms event: {}", start.elapsed().as_millis(), hex(&buf[..n]));
-        }
-        std::thread::sleep(Duration::from_millis(10));
+#[derive(Subcommand)]
+enum EarbudsCmd {
+    /// Read battery, connection and all readable settings.
+    Info,
+    /// Noise control.
+    Anc { mode: AncArg },
+    /// EQ preset.
+    Eq { preset: EqArg },
+    /// Do-not-disturb during 2.4 GHz gaming.
+    Dnd { state: OnOff },
+    /// Microphone on/off (on = live).
+    Mic { state: OnOff },
+    /// Wireless power saving.
+    PowerSaving { state: OnOff },
+    /// Power-saving timeout in minutes (5, 15, 30, 45, 60 in Synapse).
+    Timeout { minutes: u16 },
+    /// Auto-pause when an earbud is removed.
+    AutoPause { state: OnOff },
+    /// Touch gestures.
+    Gestures { state: OnOff },
+    /// Voice prompts.
+    Prompts { state: OnOff },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum OnOff {
+    On,
+    Off,
+}
+
+impl OnOff {
+    fn on(self) -> bool {
+        matches!(self, OnOff::On)
     }
-    bail!("no battery reply within 2s")
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum AncArg {
+    Off,
+    Anc,
+    Ambient,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum EqArg {
+    Game,
+    Music,
+    Movie,
+    Flat,
+}
+
+fn earbuds(api: &HidApi, cmd: &EarbudsCmd) -> Result<()> {
+    use razer_hid::earbuds::Earbuds;
+    use razer_proto::hyperspeed::{Anc, EqPreset};
+
+    let e = Earbuds::open(api)?.context("Hammerhead V3 HyperSpeed dongle not found")?;
+    let onoff = |b: bool| if b { "on" } else { "off" };
+    match *cmd {
+        EarbudsCmd::Info => {
+            let pct = |p: Option<u8>| p.map_or("not connected".into(), |p| format!("{p}%"));
+            match e.battery() {
+                Ok(b) => println!("battery:       left {}, right {}", pct(b.left), pct(b.right)),
+                Err(err) => println!("battery:       {err:#}"),
+            }
+            println!("connection:    {:02x?}", e.connection()?);
+            let (mode, calls) = e.anc()?;
+            println!("noise control: {mode:?} (reduce during BT calls: {})", onoff(calls == 0x01));
+            println!("mic:           {}", if e.mic_muted()? { "off (muted)" } else { "on" });
+            println!("dnd (gaming):  {}", onoff(e.dnd()?));
+            println!(
+                "power saving:  {}, after {} min",
+                onoff(e.power_saving()?),
+                e.power_timeout_secs()? / 60
+            );
+        }
+        EarbudsCmd::Anc { mode } => {
+            let (_, calls) = e.anc()?;
+            let mode = match mode {
+                AncArg::Off => Anc::Off,
+                AncArg::Anc => Anc::On,
+                AncArg::Ambient => Anc::Ambient,
+            };
+            e.set_anc(mode, calls)?;
+            println!("noise control now {:?}", e.anc()?.0);
+        }
+        EarbudsCmd::Eq { preset } => {
+            e.set_eq(match preset {
+                EqArg::Game => EqPreset::Game,
+                EqArg::Music => EqPreset::Music,
+                EqArg::Movie => EqPreset::Movie,
+                EqArg::Flat => EqPreset::Custom,
+            })?;
+            println!("eq set");
+        }
+        EarbudsCmd::Dnd { state } => {
+            e.set_dnd(state.on())?;
+            println!("dnd now {}", onoff(e.dnd()?));
+        }
+        EarbudsCmd::Mic { state } => {
+            e.set_mic_muted(!state.on())?;
+            println!("mic now {}", onoff(!e.mic_muted()?));
+        }
+        EarbudsCmd::PowerSaving { state } => {
+            e.set_power_saving(state.on())?;
+            println!("power saving now {}", onoff(e.power_saving()?));
+        }
+        EarbudsCmd::Timeout { minutes } => {
+            if !(1..=60).contains(&minutes) {
+                bail!("timeout must be 1..=60 minutes");
+            }
+            e.set_power_timeout_secs(minutes * 60)?;
+            println!("timeout now {} min", e.power_timeout_secs()? / 60);
+        }
+        EarbudsCmd::AutoPause { state } => {
+            e.set_auto_pause(state.on())?;
+            println!("auto-pause set {}", onoff(state.on()));
+        }
+        EarbudsCmd::Gestures { state } => {
+            e.set_gestures(state.on())?;
+            println!("gestures set {}", onoff(state.on()));
+        }
+        EarbudsCmd::Prompts { state } => {
+            e.set_audio_prompts(state.on())?;
+            println!("prompts set {}", onoff(state.on()));
+        }
+    }
+    Ok(())
 }
 
 fn list(api: &HidApi) -> Result<()> {

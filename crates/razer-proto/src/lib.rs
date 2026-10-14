@@ -247,15 +247,21 @@ pub mod extended {
     }
 }
 
-/// Message frame used by the Hammerhead V3 HyperSpeed dongle (feature report 0x02,
+/// Request/reply mailbox of the Hammerhead V3 HyperSpeed dongle (feature report 0x02,
 /// 63 bytes after the report id). See `docs/hammerhead-v3-hyperspeed.md`.
 pub mod hyperspeed {
     pub const REPORT_ID: u8 = 0x02;
     /// Report id + 63 bytes.
     pub const FRAME_LEN: usize = 64;
-    const HEADER: [u8; 5] = [0x05, 0x60, 0x00, 0x00, 0x00];
     const LEN: usize = 6;
     const CRC: usize = 62;
+    const MAX_DATA: usize = CRC - 9;
+
+    pub const STATUS_REQUEST: u8 = 0x00;
+    pub const STATUS_OK: u8 = 0x02;
+    pub const STATUS_PUSH: u8 = 0x05;
+    /// Sequence numbers the host may use; 0x60 is taken by device pushes.
+    pub const SEQ_RANGE: std::ops::RangeInclusive<u8> = 0x61..=0x7f;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct Message {
@@ -264,14 +270,23 @@ pub mod hyperspeed {
         pub data: Vec<u8>,
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Frame {
+        pub status: u8,
+        pub seq: u8,
+        pub msg: Message,
+    }
+
     pub fn checksum(f: &[u8; FRAME_LEN]) -> u8 {
         f[LEN..CRC].iter().fold(0, |a, b| a ^ b)
     }
 
-    pub fn encode(m: &Message) -> [u8; FRAME_LEN] {
+    pub fn encode(status: u8, seq: u8, m: &Message) -> [u8; FRAME_LEN] {
+        assert!(m.data.len() <= MAX_DATA);
         let mut f = [0u8; FRAME_LEN];
         f[0] = REPORT_ID;
-        f[1..6].copy_from_slice(&HEADER);
+        f[1] = status;
+        f[2] = seq;
         f[LEN] = m.data.len() as u8;
         f[7] = m.cmd;
         f[8] = m.sub;
@@ -280,50 +295,194 @@ pub mod hyperspeed {
         f
     }
 
-    /// `None` for an empty buffer, a foreign header or a bad checksum.
-    pub fn decode(f: &[u8; FRAME_LEN]) -> Option<Message> {
-        if f[1..6] != HEADER || f[CRC] != checksum(f) {
-            return None;
-        }
-        let n = (f[LEN] as usize).min(CRC - 9);
-        Some(Message { cmd: f[7], sub: f[8], data: f[9..9 + n].to_vec() })
+    pub fn request(seq: u8, m: &Message) -> [u8; FRAME_LEN] {
+        encode(STATUS_REQUEST, seq, m)
     }
 
-    /// Like OpenRazer, a get request carries the `0x80 | id` sub-command its reply
-    /// echoes; the bare id is presumably the set form. The reply observed on the wire
-    /// is `07 80 <left%> <right%>`.
-    pub fn get_battery() -> Message {
-        Message { cmd: 0x07, sub: 0x80, data: vec![0, 0] }
+    /// `None` for an empty buffer, a foreign layout or a bad checksum.
+    pub fn decode(f: &[u8; FRAME_LEN]) -> Option<Frame> {
+        if f[0] != REPORT_ID
+            || f[3..6] != [0, 0, 0]
+            || f[CRC] != checksum(f)
+            || (f[7] == 0 && f[8] == 0)
+        {
+            return None;
+        }
+        let n = (f[LEN] as usize).min(MAX_DATA);
+        Some(Frame {
+            status: f[1],
+            seq: f[2],
+            msg: Message { cmd: f[7], sub: f[8], data: f[9..9 + n].to_vec() },
+        })
+    }
+
+    fn msg(cmd: u8, sub: u8, data: &[u8]) -> Message {
+        Message { cmd, sub, data: data.to_vec() }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Anc {
+        Off,
+        On,
+        Ambient,
+        Other(u8),
+    }
+
+    impl Anc {
+        pub fn code(self) -> u8 {
+            match self {
+                Anc::Off => 0x00,
+                Anc::On => 0x01,
+                Anc::Ambient => 0x50,
+                Anc::Other(c) => c,
+            }
+        }
+
+        pub fn from_code(c: u8) -> Self {
+            match c {
+                0x00 => Anc::Off,
+                0x01 => Anc::On,
+                0x50 => Anc::Ambient,
+                c => Anc::Other(c),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum EqPreset {
+        Game,
+        Music,
+        Movie,
+        Custom,
+    }
+
+    impl EqPreset {
+        pub fn code(self) -> u8 {
+            match self {
+                EqPreset::Game => 0x01,
+                EqPreset::Music => 0x02,
+                EqPreset::Movie => 0x03,
+                EqPreset::Custom => 0x1f,
+            }
+        }
+
+        /// Band bytes Synapse sends with the preset (custom = flat).
+        pub fn bands(self) -> [u8; 10] {
+            match self {
+                EqPreset::Game => [0x02, 0x02, 0x03, 0x04, 0x01, 0x81, 0x02, 0x03, 0x03, 0x03],
+                EqPreset::Music => [0x02, 0x02, 0x81, 0x81, 0x81, 0x81, 0x01, 0x03, 0x03, 0x03],
+                EqPreset::Movie => [0x03, 0x03, 0x03, 0x84, 0x84, 0x82, 0x02, 0x03, 0x03, 0x03],
+                EqPreset::Custom => [0; 10],
+            }
+        }
+    }
+
+    /// Requests, byte-for-byte as Synapse sends them.
+    pub mod req {
+        use super::{Anc, EqPreset, Message, msg};
+
+        pub fn connection() -> Message {
+            msg(0x18, 0x9a, &[0x01])
+        }
+        pub fn get_battery() -> Message {
+            msg(0x07, 0x80, &[])
+        }
+        pub fn get_anc() -> Message {
+            msg(0x18, 0x86, &[0x01])
+        }
+        pub fn set_anc(mode: Anc, x: u8) -> Message {
+            msg(0x18, 0x06, &[0x01, mode.code(), x])
+        }
+        pub fn get_power_saving() -> Message {
+            msg(0x07, 0x88, &[0x01])
+        }
+        pub fn set_power_saving(on: bool) -> Message {
+            msg(0x07, 0x08, &[0x01, on as u8])
+        }
+        pub fn get_power_timeout() -> Message {
+            msg(0x07, 0x83, &[])
+        }
+        pub fn set_power_timeout(secs: u16) -> Message {
+            msg(0x07, 0x03, &secs.to_be_bytes())
+        }
+        pub fn get_dnd() -> Message {
+            msg(0x18, 0x85, &[0x01])
+        }
+        pub fn set_dnd(on: bool) -> Message {
+            msg(0x18, 0x05, &[0x01, on as u8])
+        }
+        pub fn get_mic_mute() -> Message {
+            msg(0x18, 0x84, &[0x01, 0x02])
+        }
+        pub fn set_mic_mute(muted: bool) -> Message {
+            msg(0x18, 0x04, &[0x01, 0x02, muted as u8])
+        }
+        pub fn set_auto_pause(on: bool) -> Message {
+            msg(0x18, 0x1e, &[0x01, on as u8])
+        }
+        pub fn set_gestures(on: bool) -> Message {
+            msg(0x18, 0x22, &[0x01, on as u8])
+        }
+        pub fn set_audio_prompts(on: bool) -> Message {
+            msg(0x18, 0x10, &[0x01, 0xff, on as u8])
+        }
+        pub fn set_eq_preset(p: EqPreset) -> Message {
+            msg(0x18, 0x00, &[0x01, 0x01, 0x00, p.code()])
+        }
+        pub fn set_eq_bands(bands: [u8; 10]) -> Message {
+            let mut d = vec![0x01, 0x01];
+            d.extend_from_slice(&bands);
+            msg(0x18, 0x01, &d)
+        }
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
 
-        fn frame(body: &[u8], crc: u8) -> [u8; FRAME_LEN] {
+        fn hex(s: &str) -> Vec<u8> {
+            s.split_whitespace().map(|b| u8::from_str_radix(b, 16).unwrap()).collect()
+        }
+
+        fn frame(head: &str, crc: u8) -> [u8; FRAME_LEN] {
             let mut f = [0u8; FRAME_LEN];
-            f[..6].copy_from_slice(&[0x02, 0x05, 0x60, 0, 0, 0]);
-            f[6..6 + body.len()].copy_from_slice(body);
+            let h = hex(head);
+            f[..h.len()].copy_from_slice(&h);
             f[CRC] = crc;
             f
+        }
+
+        /// Requests Synapse sent, from the USB capture: our encoder must match exactly.
+        #[test]
+        fn requests_match_synapse() {
+            let cases: &[(u8, Message, &str, u8)] = &[
+                (0x6a, req::connection(), "02 00 6a 00 00 00 01 18 9a 01", 0x82),
+                (0x6b, req::get_anc(), "02 00 6b 00 00 00 01 18 86 01", 0x9e),
+                (0x6c, req::set_anc(Anc::Off, 0x0a), "02 00 6c 00 00 00 03 18 06 01 00 0a", 0x16),
+                (0x6e, req::set_anc(Anc::On, 0x0a), "02 00 6e 00 00 00 03 18 06 01 01 0a", 0x17),
+            ];
+            for (seq, m, head, crc) in cases {
+                assert_eq!(request(*seq, m), frame(head, *crc), "{m:?}");
+            }
         }
 
         /// Frames captured from the real dongle.
         #[test]
         fn captured_frames_decode() {
-            let cases: &[(&[u8], u8)] = &[
-                (&[0x02, 0x18, 0x9f, 0x00], 0x85),
-                (&[0x02, 0x18, 0x9f, 0x01], 0x84),
-                (&[0x02, 0x07, 0x80, 0x63, 0x63], 0x85),
-                (&[0x03, 0x18, 0x84, 0x01, 0x02, 0x01], 0x9d),
-                (&[0x03, 0x18, 0x9a, 0x01, 0x03, 0x03], 0x80),
+            let cases: &[(&str, u8)] = &[
+                ("02 05 60 00 00 00 02 18 9f 00", 0x85),
+                ("02 05 60 00 00 00 02 18 9f 01", 0x84),
+                ("02 05 60 00 00 00 02 07 80 63 63", 0x85),
+                ("02 05 60 00 00 00 03 18 84 01 02 01", 0x9d),
+                ("02 02 6a 00 00 00 03 18 9a 01 03 03", 0x80),
             ];
-            for (body, crc) in cases {
-                let m = decode(&frame(body, *crc)).expect("valid frame");
-                assert_eq!(encode(&m), frame(body, *crc));
+            for (head, crc) in cases {
+                let f = decode(&frame(head, *crc)).expect("valid frame");
+                assert_eq!(encode(f.status, f.seq, &f.msg), frame(head, *crc));
             }
-            let battery = decode(&frame(&[0x02, 0x07, 0x80, 0x63, 0x63], 0x85)).unwrap();
-            assert_eq!(battery, Message { cmd: 0x07, sub: 0x80, data: vec![0x63, 0x63] });
+            let b = decode(&frame("02 05 60 00 00 00 02 07 80 63 63", 0x85)).unwrap();
+            assert_eq!((b.status, b.seq), (STATUS_PUSH, 0x60));
+            assert_eq!(b.msg, msg(0x07, 0x80, &[0x63, 0x63]));
             assert_eq!(decode(&[0; FRAME_LEN]), None);
         }
     }

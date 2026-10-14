@@ -8,6 +8,8 @@ use razer_proto::{REPORT_LEN, Report, Status, extended::Effect, led, mouse, stan
 
 pub use hidapi;
 
+pub mod earbuds;
+
 pub const RAZER_VID: u16 = 0x1532;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
