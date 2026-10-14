@@ -400,6 +400,11 @@ fn display(cmd: &DisplayCmd) -> Result<()> {
                         "off".into()
                     }
                 );
+                if let Some((bits, mode)) = hidconfig_win::graphics::advanced_color_raw(&x.device) {
+                    println!(
+                        "  raw:      bits {bits:#010b} active mode {mode} (0 SDR, 1 ACM/WCG, 2 HDR)"
+                    );
+                }
                 if let Some(a) = &x.acm {
                     println!(
                         "  ACM:      {}{}",

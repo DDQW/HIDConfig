@@ -405,6 +405,13 @@ pub fn set_hdr(device: &str, on: bool) -> Result<()> {
     set_hdr_on(&path_for(device)?, on)
 }
 
+/// (adapter, target id) of a display, for DisplayConfig queries.
+pub(crate) fn target_of(device: &str) -> Option<(windows::Win32::Foundation::LUID, u32)> {
+    path_for(device)
+        .ok()
+        .map(|p| (p.target.adapterId, p.target.id))
+}
+
 /// Automatic Color Management on/off.
 pub fn set_acm(device: &str, on: bool) -> Result<()> {
     let p = path_for(device)?;

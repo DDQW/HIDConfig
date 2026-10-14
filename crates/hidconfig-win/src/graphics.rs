@@ -179,6 +179,18 @@ pub(crate) fn hdr_state(adapter: LUID, target: u32) -> Option<(bool, bool)> {
     Some((v.value & (1 << 4) != 0, v.value & (1 << 5) != 0))
 }
 
+/// Raw 24H2 advanced-colour bits and active mode (0 SDR, 1 WCG, 2 HDR), for diagnostics.
+pub fn advanced_color_raw(device: &str) -> Option<(u32, i32)> {
+    let p = crate::display::target_of(device)?;
+    let mut v = AdvancedColorInfo2 {
+        header: header::<AdvancedColorInfo2>(GET_ADVANCED_COLOR_INFO_2, p.0, p.1),
+        ..Default::default()
+    };
+    // SAFETY: header size describes AdvancedColorInfo2.
+    (unsafe { DisplayConfigGetDeviceInfo(&mut v.header) } == 0)
+        .then_some((v.value, v.active_color_mode))
+}
+
 /// DISPLAYCONFIG_DEVICE_INFO_SET_HDR_STATE (24H2+): switches HDR without touching ACM.
 const SET_HDR_STATE: i32 = 16;
 
