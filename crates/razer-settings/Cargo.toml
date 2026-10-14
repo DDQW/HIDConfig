@@ -1,0 +1,11 @@
+[package]
+name = "razer-settings"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+razer-hid = { version = "0.1.0", path = "../razer-hid" }
+razer-proto = { version = "0.1.0", path = "../razer-proto" }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.8"

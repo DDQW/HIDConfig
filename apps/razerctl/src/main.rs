@@ -32,6 +32,14 @@ enum Cmd {
     },
     /// Show firmware and current settings of supported devices.
     Info,
+    /// Print the config file path and contents.
+    Config,
+    /// Save what the devices currently report into the config file.
+    Save,
+    /// Apply the config file once.
+    Apply,
+    /// Keep running: re-apply the config on device arrival, resume, or config edits.
+    Watch,
     /// Set DPI (one value for both axes, or X and Y).
     Dpi { x: u16, y: Option<u16> },
     /// Set polling rate in Hz (125, 500, 1000).
@@ -62,6 +70,10 @@ fn main() -> Result<()> {
         Cmd::Descriptor { pid } => return descriptor(&api, pid),
         Cmd::Listen { pid, secs, guided } => return listen(&api, pid, *secs, *guided),
         Cmd::Earbuds { cmd } => return earbuds(&api, cmd),
+        Cmd::Config => return show_config(),
+        Cmd::Save => return save(&api),
+        Cmd::Apply => return apply(&api),
+        Cmd::Watch => return watch(),
         _ => {}
     }
     let devices: Vec<Device> = razer_hid::open_all(&api).into_iter().collect::<Result<_>>()?;
@@ -76,7 +88,14 @@ fn main() -> Result<()> {
 
 fn run(dev: &Device, cmd: &Cmd) -> Result<()> {
     match *cmd {
-        Cmd::List | Cmd::Descriptor { .. } | Cmd::Listen { .. } | Cmd::Earbuds { .. } => unreachable!(),
+        Cmd::List
+        | Cmd::Descriptor { .. }
+        | Cmd::Listen { .. }
+        | Cmd::Earbuds { .. }
+        | Cmd::Config
+        | Cmd::Save
+        | Cmd::Apply
+        | Cmd::Watch => unreachable!(),
         Cmd::Info => {
             let (maj, min) = dev.firmware()?;
             let (x, y) = dev.dpi()?;
@@ -113,13 +132,53 @@ fn run(dev: &Device, cmd: &Cmd) -> Result<()> {
     Ok(())
 }
 
-fn parse_rgb(s: &str) -> Result<[u8; 3]> {
-    let s = s.trim_start_matches('#');
-    if s.len() != 6 {
-        bail!("colour must be RRGGBB");
+use razer_settings::parse_rgb;
+
+fn show_config() -> Result<()> {
+    let p = razer_settings::path()?;
+    println!("# {}", p.display());
+    match std::fs::read_to_string(&p) {
+        Ok(s) => print!("{s}"),
+        Err(_) => println!("# (no config yet; run `razerctl save`)"),
     }
-    let v = u32::from_str_radix(s, 16).context("colour must be hex RRGGBB")?;
-    Ok([(v >> 16) as u8, (v >> 8) as u8, v as u8])
+    Ok(())
+}
+
+fn save(api: &HidApi) -> Result<()> {
+    let base = razer_settings::Config::load()?;
+    let cfg = razer_settings::snapshot(api, &base)?;
+    let p = cfg.save()?;
+    println!("saved to {}", p.display());
+    print!("{}", toml::to_string_pretty(&cfg)?);
+    Ok(())
+}
+
+fn apply(api: &HidApi) -> Result<()> {
+    let cfg = razer_settings::Config::load()?;
+    for dev in razer_hid::open_all(api) {
+        let dev = dev?;
+        razer_settings::apply_viper(&dev, &cfg.viper).with_context(|| dev.model.name)?;
+        println!("{}: applied", dev.model.name);
+    }
+    if let Some(e) = razer_hid::earbuds::Earbuds::open(api)? {
+        razer_settings::apply_earbuds(&e, &cfg.earbuds).context("earbuds")?;
+        println!("Hammerhead V3 HyperSpeed: applied");
+    }
+    Ok(())
+}
+
+fn watch() -> Result<()> {
+    println!("watching (config: {}), Ctrl-C to stop", razer_settings::path()?.display());
+    razer_settings::watch(
+        |ev| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() % 86400)
+                .unwrap_or(0);
+            println!("[{:02}:{:02}:{:02} UTC] {ev:?}", now / 3600, now / 60 % 60, now % 60);
+        },
+        || true,
+    )
 }
 
 fn descriptor(api: &HidApi, pid: &str) -> Result<()> {
