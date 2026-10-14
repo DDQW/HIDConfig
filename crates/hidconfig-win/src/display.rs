@@ -384,6 +384,20 @@ pub mod vcp {
     pub const POWER: u8 = 0xd6;
 }
 
+pub fn control_name(code: u8) -> String {
+    match code {
+        vcp::BRIGHTNESS => "brightness".into(),
+        vcp::CONTRAST => "contrast".into(),
+        vcp::COLOR_PRESET => "the colour preset".into(),
+        vcp::RED_GAIN => "red gain".into(),
+        vcp::GREEN_GAIN => "green gain".into(),
+        vcp::BLUE_GAIN => "blue gain".into(),
+        vcp::VOLUME => "volume".into(),
+        vcp::SHARPNESS => "sharpness".into(),
+        c => format!("VCP {c:#04x}"),
+    }
+}
+
 /// MCCS 2.2 names for input source values (VCP 0x60).
 pub fn input_name(v: u8) -> String {
     match v {
@@ -593,9 +607,23 @@ pub fn set_vcp(device: &str, code: u8, value: u32) -> Result<()> {
     let h = hmonitor_for(device).with_context(|| format!("no display {device}"))?;
     let phys = physical(h).context("monitor doesn't expose a physical handle")?;
     let m = phys.0.first().context("no physical monitor")?;
+    let before = read_vcp(m, code).map(|v| v.0);
     // SAFETY: valid physical monitor handle.
     if unsafe { SetVCPFeature(m.hPhysicalMonitor, code, value) } == 0 {
         bail!("monitor didn't accept VCP {code:#04x} = {value} (is DDC/CI enabled in its menu?)");
+    }
+    // Some monitors acknowledge the write but ignore it while a picture mode owns
+    // the setting (e.g. dynamic contrast / ECO locking brightness). Say so.
+    if code != vcp::INPUT && before.is_some_and(|b| b != value) {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        if read_vcp(m, code).map(|v| v.0) == before {
+            bail!(
+                "the monitor kept {} at {} - it's probably locked by a picture mode \
+                 (dynamic/advanced contrast, ECO, a game preset); turn that off in the monitor's menu",
+                control_name(code),
+                before.unwrap_or_default()
+            );
+        }
     }
     Ok(())
 }
