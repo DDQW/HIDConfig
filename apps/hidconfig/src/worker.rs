@@ -17,6 +17,8 @@ pub enum Cmd {
     MicOn(bool),
     /// Stop managing Windows settings and put the backed-up values back.
     WinRestore,
+    /// A live display change (mode, HDR, scaling, DDC/CI); displays are re-read after.
+    Display(Box<dyn FnOnce() -> anyhow::Result<()> + Send>),
     /// Re-read device status now (after an external change).
     RefreshStatus,
     /// A live audio change (volume, mute) that isn't saved in the profile.
@@ -102,6 +104,15 @@ fn run(rx: Receiver<Cmd>, publish: impl Fn(Snapshot)) {
                 }
                 watcher.refresh_status_soon();
                 watcher.tick(&mut on_event);
+            }
+            Ok(Cmd::Display(op)) => {
+                if let Err(e) = op() {
+                    on_event(Event::Failed(
+                        hidconfig_settings::Target::Windows,
+                        format!("display: {e:#}"),
+                    ));
+                }
+                watcher.refresh_displays();
             }
             Ok(Cmd::RefreshStatus) => {
                 watcher.refresh_status_soon();

@@ -5,6 +5,7 @@
 
 pub mod audio;
 mod devices;
+pub mod display;
 pub mod gamepad;
 pub mod keyboard;
 pub mod mouse;

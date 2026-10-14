@@ -383,6 +383,8 @@ pub struct Status {
     pub windows: Option<WindowsSettings>,
     pub audio: AudioLive,
     pub pads: Vec<hidconfig_win::gamepad::Pad>,
+    /// `None` until the first (slow, DDC/CI) read finished.
+    pub displays: Option<Vec<hidconfig_win::display::Display>>,
     pub adapter: Option<hidconfig_win::gamepad::Adapter>,
 }
 
@@ -498,6 +500,13 @@ impl Watcher {
     }
 
     /// Mic mute is a live toggle, not a saved setting.
+    /// Re-reads displays, including monitor values over DDC/CI.
+    pub fn refresh_displays(&mut self) {
+        if let Ok(d) = hidconfig_win::display::displays(true) {
+            self.status.displays = Some(d);
+        }
+    }
+
     /// Re-reads audio now; `details` also re-probes formats and spatial state.
     pub fn refresh_audio(&mut self, details: bool, on_event: &mut dyn FnMut(Event)) {
         if details {
@@ -748,6 +757,7 @@ impl Watcher {
         self.status.earbuds = earbuds;
         self.status.windows = hidconfig_win::read().ok();
         self.status.adapter = hidconfig_win::gamepad::adapter();
+        self.refresh_displays();
     }
 }
 

@@ -40,6 +40,11 @@ enum Cmd {
     Apply,
     /// Keep running: re-apply the config on device arrival, resume, or config edits.
     Watch,
+    /// Displays: Windows display settings and monitor controls (DDC/CI).
+    Display {
+        #[command(subcommand)]
+        cmd: DisplayCmd,
+    },
     /// Game controllers and the Xbox Wireless Adapter.
     Gamepad {
         #[command(subcommand)]
@@ -101,6 +106,7 @@ fn main() -> Result<()> {
         Cmd::Win { cmd } => return win(cmd),
         Cmd::Audio { cmd } => return audio(cmd),
         Cmd::Gamepad { cmd } => return gamepad(cmd),
+        Cmd::Display { cmd } => return display(cmd),
         _ => {}
     }
     let devices: Vec<Device> = hidconfig_hid::open_all(&api)
@@ -127,7 +133,8 @@ fn run(dev: &Device, cmd: &Cmd) -> Result<()> {
         | Cmd::Watch
         | Cmd::Win { .. }
         | Cmd::Audio { .. }
-        | Cmd::Gamepad { .. } => unreachable!(),
+        | Cmd::Gamepad { .. }
+        | Cmd::Display { .. } => unreachable!(),
         Cmd::Info => {
             let (maj, min) = dev.firmware()?;
             let (x, y) = dev.dpi()?;
@@ -304,6 +311,139 @@ fn win(cmd: &WinCmd) -> Result<()> {
                 "acceleration curve is default: {}",
                 hidconfig_win::mouse::curve_is_default()
             );
+        }
+    }
+    Ok(())
+}
+
+#[derive(Subcommand)]
+enum DisplayCmd {
+    /// Displays with mode, HDR, scaling and monitor (DDC/CI) values.
+    List,
+    /// Set resolution/refresh, e.g. `mode 1 3840x2160@60` (display number or \\.\DISPLAYn).
+    Mode { display: String, mode: String },
+    /// HDR on/off.
+    Hdr { display: String, state: OnOff },
+    /// Scaling in percent (100, 125, 150 ...).
+    Scale { display: String, percent: u32 },
+    /// Set a monitor control: brightness, contrast, volume, input, preset, sharpness, or a hex VCP code.
+    Set {
+        display: String,
+        control: String,
+        value: String,
+    },
+}
+
+fn display_device(arg: &str) -> String {
+    if arg.chars().all(|c| c.is_ascii_digit()) {
+        format!(r"\\.\DISPLAY{arg}")
+    } else {
+        arg.to_string()
+    }
+}
+
+fn display(cmd: &DisplayCmd) -> Result<()> {
+    use hidconfig_win::display::{self as d, vcp};
+    match cmd {
+        DisplayCmd::List => {
+            for x in d::displays(true)? {
+                println!(
+                    "{} {}{}",
+                    x.device,
+                    x.name,
+                    if x.primary { " (primary)" } else { "" }
+                );
+                println!(
+                    "  mode:     {}  rotation {}°  ({} modes)",
+                    x.mode,
+                    x.rotation,
+                    x.modes.len()
+                );
+                println!(
+                    "  HDR:      {}",
+                    if !x.hdr_supported {
+                        "not supported".into()
+                    } else if x.hdr_on {
+                        "on".to_string()
+                    } else {
+                        "off".into()
+                    }
+                );
+                println!(
+                    "  scaling:  {}  options {:?}",
+                    x.scale.map_or("?".into(), |s| format!("{s}%")),
+                    x.scales
+                );
+                match &x.ddc {
+                    None => println!("  DDC/CI:   no reply"),
+                    Some(ddc) => {
+                        for (code, (cur, max)) in &ddc.values {
+                            let label = match *code {
+                                vcp::INPUT => format!("{} ({cur})", d::input_name(*cur as u8)),
+                                vcp::COLOR_PRESET => {
+                                    format!("{} ({cur})", d::preset_name(*cur as u8))
+                                }
+                                _ => format!("{cur} / {max}"),
+                            };
+                            println!("  VCP {code:02x}:   {label}");
+                        }
+                        if let Some(inputs) = ddc.caps.get(&vcp::INPUT) {
+                            println!(
+                                "  inputs:   {}",
+                                inputs
+                                    .iter()
+                                    .map(|v| d::input_name(*v))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        DisplayCmd::Mode { display, mode } => {
+            let (res, hz) = mode.split_once('@').context("format: WIDTHxHEIGHT@HZ")?;
+            let (w, h) = res
+                .split_once(['x', 'X'])
+                .context("format: WIDTHxHEIGHT@HZ")?;
+            let m = d::Mode {
+                width: w.parse()?,
+                height: h.parse()?,
+                hz: hz.parse()?,
+            };
+            d::set_mode(&display_device(display), m, None)?;
+            println!("mode set to {m}");
+        }
+        DisplayCmd::Hdr { display, state } => {
+            d::set_hdr(&display_device(display), state.on())?;
+            println!("HDR {}", if state.on() { "on" } else { "off" });
+        }
+        DisplayCmd::Scale { display, percent } => {
+            d::set_scale(&display_device(display), *percent)?;
+            println!("scaling {percent}%");
+        }
+        DisplayCmd::Set {
+            display,
+            control,
+            value,
+        } => {
+            let code = match control.as_str() {
+                "brightness" => vcp::BRIGHTNESS,
+                "contrast" => vcp::CONTRAST,
+                "volume" => vcp::VOLUME,
+                "input" => vcp::INPUT,
+                "preset" => vcp::COLOR_PRESET,
+                "sharpness" => vcp::SHARPNESS,
+                hex => u8::from_str_radix(hex.trim_start_matches("0x"), 16)
+                    .context("unknown control")?,
+            };
+            let v = if let Some(h) = value.strip_prefix("0x") {
+                u32::from_str_radix(h, 16)?
+            } else {
+                value.parse()?
+            };
+            d::set_vcp(&display_device(display), code, v)?;
+            println!("VCP {code:02x} = {v}");
         }
     }
     Ok(())

@@ -97,6 +97,7 @@ fn run() -> Result<()> {
     wire_windows(&ui, &tx);
     wire_audio(&ui, &tx);
     wire_pads(&ui);
+    wire_display(&ui, &tx);
 
     MenuEvent::set_event_handler(Some(|ev: MenuEvent| {
         let id = ev.id.0;
@@ -612,6 +613,279 @@ fn update_pads(ui: &SettingsWindow, s: &Snapshot) {
     }
 }
 
+thread_local! {
+    /// Display mode to go back to if a change isn't confirmed: (device, mode, rotation).
+    static REVERT: RefCell<Option<(String, hidconfig_win::display::Mode, u32)>> = const { RefCell::new(None) };
+}
+
+fn display_op(tx: &Sender<Cmd>, op: impl FnOnce() -> anyhow::Result<()> + Send + 'static) {
+    let _ = tx.send(Cmd::Display(Box::new(op)));
+}
+
+fn with_display<R>(
+    device: &str,
+    f: impl FnOnce(&hidconfig_win::display::Display) -> Option<R>,
+) -> Option<R> {
+    let mut out = None;
+    with_app(|app| {
+        out = app
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.status.displays.as_ref())
+            .and_then(|ds| ds.iter().find(|d| d.device == device))
+            .and_then(f);
+    });
+    out
+}
+
+/// Resolutions (largest first) and the refresh rates for a resolution.
+fn resolutions(d: &hidconfig_win::display::Display) -> Vec<(u32, u32)> {
+    let mut v: Vec<(u32, u32)> = d.modes.iter().map(|m| (m.width, m.height)).collect();
+    v.dedup();
+    v
+}
+
+fn rates(d: &hidconfig_win::display::Display, w: u32, h: u32) -> Vec<u32> {
+    let mut v: Vec<u32> = d
+        .modes
+        .iter()
+        .filter(|m| m.width == w && m.height == h)
+        .map(|m| m.hz)
+        .collect();
+    v.sort_unstable_by(|a, b| b.cmp(a));
+    v.dedup();
+    v
+}
+
+/// Applies a mode change and arms the 15 s revert.
+fn change_mode(
+    ui: &slint::Weak<SettingsWindow>,
+    tx: &Sender<Cmd>,
+    device: &str,
+    mode: hidconfig_win::display::Mode,
+    rotation: Option<u32>,
+) {
+    use hidconfig_win::display as d;
+    let Some((cur, cur_rot)) = with_display(device, |x| Some((x.mode, x.rotation))) else {
+        return;
+    };
+    if cur == mode && rotation.is_none_or(|r| r == cur_rot) {
+        return;
+    }
+    REVERT.with(|r| *r.borrow_mut() = Some((device.to_string(), cur, cur_rot)));
+    let dev = device.to_string();
+    display_op(tx, move || d::set_mode(&dev, mode, rotation));
+    if let Some(ui) = ui.upgrade() {
+        let st = ui.global::<DisplayState>();
+        st.set_confirm_seconds(15);
+        st.set_confirm_pending(true);
+    }
+}
+
+fn wire_display(ui: &SettingsWindow, tx: &Sender<Cmd>) {
+    use hidconfig_win::display::{self as d, Mode, vcp};
+    let st = ui.global::<DisplayState>();
+
+    let (w, t) = (ui.as_weak(), tx.clone());
+    st.on_resolution(move |dev, i| {
+        let Some(mode) = with_display(&dev, |x| {
+            let (rw, rh) = *resolutions(x).get(i as usize)?;
+            // Keep the refresh rate if this resolution offers it, else take the highest.
+            let rs = rates(x, rw, rh);
+            let hz = if rs.contains(&x.mode.hz) {
+                x.mode.hz
+            } else {
+                *rs.first()?
+            };
+            Some(Mode {
+                width: rw,
+                height: rh,
+                hz,
+            })
+        }) else {
+            return;
+        };
+        change_mode(&w, &t, &dev, mode, None);
+    });
+    let (w, t) = (ui.as_weak(), tx.clone());
+    st.on_rate(move |dev, i| {
+        let Some(mode) = with_display(&dev, |x| {
+            let hz = *rates(x, x.mode.width, x.mode.height).get(i as usize)?;
+            Some(Mode { hz, ..x.mode })
+        }) else {
+            return;
+        };
+        change_mode(&w, &t, &dev, mode, None);
+    });
+    let (w, t) = (ui.as_weak(), tx.clone());
+    st.on_rotation(move |dev, i| {
+        let Some(mode) = with_display(&dev, |x| Some(x.mode)) else {
+            return;
+        };
+        change_mode(&w, &t, &dev, mode, Some(i as u32 * 90));
+    });
+    let t = tx.clone();
+    st.on_scale(move |dev, i| {
+        let Some(pct) = with_display(&dev, |x| x.scales.get(i as usize).copied()) else {
+            return;
+        };
+        let dev = dev.to_string();
+        display_op(&t, move || d::set_scale(&dev, pct));
+    });
+    let t = tx.clone();
+    st.on_hdr(move |dev, on| {
+        let dev = dev.to_string();
+        display_op(&t, move || d::set_hdr(&dev, on));
+    });
+    let t = tx.clone();
+    st.on_vcp(move |dev, code, value| {
+        let dev = dev.to_string();
+        display_op(&t, move || {
+            d::set_vcp(&dev, code as u8, value.max(0) as u32)
+        });
+    });
+    let t = tx.clone();
+    st.on_preset(move |dev, i| {
+        let Some(v) = with_display(&dev, |x| {
+            x.ddc
+                .as_ref()?
+                .caps
+                .get(&vcp::COLOR_PRESET)?
+                .get(i as usize)
+                .copied()
+        }) else {
+            return;
+        };
+        let dev = dev.to_string();
+        display_op(&t, move || d::set_vcp(&dev, vcp::COLOR_PRESET, v as u32));
+    });
+    let t = tx.clone();
+    st.on_input(move |dev, i| {
+        let Some(v) = with_display(&dev, |x| {
+            x.ddc
+                .as_ref()?
+                .caps
+                .get(&vcp::INPUT)?
+                .get(i as usize)
+                .copied()
+        }) else {
+            return;
+        };
+        let dev = dev.to_string();
+        display_op(&t, move || d::set_vcp(&dev, vcp::INPUT, v as u32));
+    });
+    let w = ui.as_weak();
+    st.on_keep(move || {
+        REVERT.with(|r| *r.borrow_mut() = None);
+        if let Some(ui) = w.upgrade() {
+            ui.global::<DisplayState>().set_confirm_pending(false);
+        }
+    });
+    let (w, t) = (ui.as_weak(), tx.clone());
+    st.on_revert(move || {
+        if let Some((dev, mode, rot)) = REVERT.with(|r| r.borrow_mut().take()) {
+            display_op(&t, move || d::set_mode(&dev, mode, Some(rot)));
+        }
+        if let Some(ui) = w.upgrade() {
+            ui.global::<DisplayState>().set_confirm_pending(false);
+        }
+    });
+}
+
+fn update_display(ui: &SettingsWindow, s: &Snapshot) {
+    use hidconfig_win::display::{self as d, vcp};
+    let st = ui.global::<DisplayState>();
+    let Some(displays) = &s.status.displays else {
+        return;
+    };
+    st.set_loading(false);
+    let previous: Vec<DisplayInfo> = {
+        use slint::Model;
+        st.get_displays().iter().collect()
+    };
+    let infos: Vec<DisplayInfo> = displays
+        .iter()
+        .map(|x| {
+            let prev = previous.iter().find(|p| p.device == x.device.as_str());
+            let keep = |prev: Option<slint::ModelRc<slint::SharedString>>, new: Vec<String>| {
+                reuse_strings(prev, new.into_iter().map(Into::into).collect())
+            };
+            let res = resolutions(x);
+            let rs = rates(x, x.mode.width, x.mode.height);
+            let ddc = x.ddc.as_ref();
+            let val = |code| ddc.and_then(|c| c.get(code)).map_or(-1, |v| v as i32);
+            let list = |code| {
+                ddc.and_then(|c| c.caps.get(&code))
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            let presets = list(vcp::COLOR_PRESET);
+            let inputs = list(vcp::INPUT);
+            let cur = |code| ddc.and_then(|c| c.get(code)).map(|v| v as u8);
+            DisplayInfo {
+                device: x.device.clone().into(),
+                name: x.name.clone().into(),
+                primary: x.primary,
+                resolutions: keep(
+                    prev.map(|p| p.resolutions.clone()),
+                    res.iter().map(|(w, h)| format!("{w} × {h}")).collect(),
+                ),
+                resolution_index: res
+                    .iter()
+                    .position(|&r| r == (x.mode.width, x.mode.height))
+                    .map_or(-1, |i| i as i32),
+                rates: keep(
+                    prev.map(|p| p.rates.clone()),
+                    rs.iter().map(|hz| format!("{hz} Hz")).collect(),
+                ),
+                rate_index: rs
+                    .iter()
+                    .position(|&hz| hz == x.mode.hz)
+                    .map_or(-1, |i| i as i32),
+                rotation_index: (x.rotation / 90) as i32,
+                scales: keep(
+                    prev.map(|p| p.scales.clone()),
+                    x.scales.iter().map(|p| format!("{p}%")).collect(),
+                ),
+                scale_index: x
+                    .scale
+                    .and_then(|c| x.scales.iter().position(|&p| p == c))
+                    .map_or(-1, |i| i as i32),
+                hdr_supported: x.hdr_supported,
+                hdr_on: x.hdr_on,
+                ddc: ddc.is_some(),
+                brightness: val(vcp::BRIGHTNESS),
+                contrast: val(vcp::CONTRAST),
+                sharpness: val(vcp::SHARPNESS),
+                sharpness_max: ddc
+                    .and_then(|c| c.values.get(&vcp::SHARPNESS))
+                    .map_or(100, |v| v.1 as i32),
+                red: val(vcp::RED_GAIN),
+                green: val(vcp::GREEN_GAIN),
+                blue: val(vcp::BLUE_GAIN),
+                volume: val(vcp::VOLUME),
+                presets: keep(
+                    prev.map(|p| p.presets.clone()),
+                    presets.iter().map(|v| d::preset_name(*v)).collect(),
+                ),
+                preset_index: cur(vcp::COLOR_PRESET)
+                    .and_then(|c| presets.iter().position(|&v| v == c))
+                    .map_or(-1, |i| i as i32),
+                inputs: keep(
+                    prev.map(|p| p.inputs.clone()),
+                    inputs.iter().map(|v| d::input_name(*v)).collect(),
+                ),
+                input_index: cur(vcp::INPUT)
+                    .and_then(|c| inputs.iter().position(|&v| v == c))
+                    .map_or(-1, |i| i as i32),
+            }
+        })
+        .collect();
+    if let Some(m) = sync_model(st.get_displays(), infos) {
+        st.set_displays(m);
+    }
+}
+
 fn wire_windows(ui: &SettingsWindow, tx: &Sender<Cmd>) {
     let win = ui.global::<WinState>();
     let t = tx.clone();
@@ -1036,4 +1310,5 @@ fn update_ui(ui: &SettingsWindow, s: &Snapshot, autostart: bool) {
     update_windows(ui, s.status.windows.as_ref());
     update_audio(ui, s);
     update_pads(ui, s);
+    update_display(ui, s);
 }
