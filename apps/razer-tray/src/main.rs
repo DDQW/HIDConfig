@@ -48,6 +48,19 @@ fn with_app(f: impl FnOnce(&mut App)) {
 
 fn main() {
     platform::init_log();
+    // Used by the installer, which runs these as the signed-in user (not elevated).
+    for arg in std::env::args().skip(1) {
+        let on = match arg.as_str() {
+            "--enable-autostart" => true,
+            "--disable-autostart" => false,
+            _ => continue,
+        };
+        if let Err(e) = platform::set_autostart(on) {
+            log(&format!("{arg}: {e:#}"));
+            std::process::exit(1);
+        }
+        return;
+    }
     let Some(_instance) = platform::single_instance() else {
         return; // already running
     };

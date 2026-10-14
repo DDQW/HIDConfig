@@ -2,3 +2,13 @@
 resolver = "3"
 members = ["apps/*", "crates/*"]
 
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+description = "Synapse-free control for Razer devices on Windows"
+repository = ""
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
