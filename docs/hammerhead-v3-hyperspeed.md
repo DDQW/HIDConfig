@@ -1,8 +1,10 @@
 # Razer Hammerhead V3 HyperSpeed (dongle PID 0x0A61): protocol notes
 
-Status: **observed only.** No request has been sent to the device yet. Everything here comes from the
-HID report descriptor plus passive captures (`razerctl listen 0a61 [--guided]`) with Synapse uninstalled.
-"Confirmed" means it matched several captures; "guess" means a hypothesis that still needs testing.
+Sources:
+- Passive captures (`razerctl listen 0a61 [--guided]`) with Synapse uninstalled.
+- A USBPcap recording of Synapse changing every setting, timestamped against UI markers (`tools/mark.ps1`) and decoded with `tools/decode_capture.py`.
+
+"Confirmed" means seen in the Synapse capture; "guess" means a hypothesis that still needs testing.
 
 ## HID collections (interface MI_03)
 
@@ -32,31 +34,58 @@ That's probably wear detection auto-resuming playback.
 
 No events were seen for in-ear on or off (apart from the Play/Pause above), or for putting the buds back in the case or closing the lid. The disconnect may come a few seconds later, after the capture ended.
 
-## Feature report `0x02` on ff14: message buffer
+## Feature report `0x02` on ff14: request/reply mailbox (confirmed)
 
-Layout (offsets include the report id byte):
+The host sends SET_REPORT `0x02`, then GET_REPORT `0x02` returns queued frames.
 
 ```
-0     1  2     3..5      6     7     8     9..     62
-02    05 60    00 00 00  len   cmd   sub   data    xor
+byte  0     1       2     3..5      6     7     8     9..        62
+      02    status  seq   00 00 00  len   cmd   sub   data[len]  xor(bytes 6..61)
 ```
 
-- **`xor` at byte 62 = XOR of bytes 6..61.** This held for all 6 distinct frames we captured.
-- `len` = number of `data` bytes after `cmd sub`. This held for every frame, assuming `18 9f` carries `xx 00`.
-- Every observed `sub` has the high bit set. In OpenRazer's convention that marks a "get" response (`0x80 | id`).
-- Reads sometimes return all zeros. The buffer appears to be consumed by the read, or empty when nothing is pending.
-- `05 60` is constant. It might be a target or channel id; that's a guess.
+- **status:** `00` in requests, `02` for a successful reply, `05` for an unsolicited push (always with seq `60`).
+- **seq:** the host counter. It runs `61..7f` and then wraps back to `61`, so `60` is reserved for pushes. The reply echoes it.
+- **Reading:** GET returns the oldest queued frame. Synapse does SET and then GETs twice, because the first GET usually returns the *previous* reply or a pending push. A client must keep reading until `status == 02` and `seq` matches.
+- **sub:** a "get" has bit 7 set (`0x80 | id`) and the matching "set" is the bare id, as in OpenRazer. A get request carries the selector bytes; the reply echoes them followed by the value.
+- **First data byte:** always `01` in everything Synapse sends. It's probably a target index (guess).
 
-Observed frames:
+Earlier failed attempts copied a push header (`05 60`) into a request, so the dongle ignored them.
 
-| cmd sub | data | Interpretation |
+### Commands (all confirmed from the Synapse capture unless marked)
+
+| Get (request → reply) | Set | Meaning |
 |---|---|---|
-| `07 80` | `63 63` | **Battery L/R = 99 %.** It matches event `0x31`. |
-| `18 9f` | `00`/`01` (+`00`) | Some boolean that toggles with case/wear state. Unknown which. |
-| `18 84` | `01 02 01` | Unknown. |
-| `18 9a` | `01 03 03` | Matches the `0x38` event payload `01 03 03`, so connection state. |
+| `07 80` push only → `L R` | | Battery % for left/right. Synapse never sends this get; it arrives as a status-05 push. |
+| `07 88 [01]` → `01 en` | `07 08 [01 en]` | Wireless power saving on/off. "On" was seen as `01 01`; "off" sent no SET in the capture because the device was already off. |
+| `07 83 []` → `hi lo` | `07 03 [hi lo]` | Power-saving timeout in **seconds**, big-endian: 300/900/1800/2700/3600 = 5/15/30/45/60 min. |
+| `18 86 [01]` → `01 mode x` | `18 06 [01 mode x]` | **ANC:** mode `00` off, `01` ANC, `50` ambient. `x`: `0a` normally, `01` when "reduce ANC during Bluetooth calls" is on. |
+| `18 9e`? `[01]` | `18 1e [01 v]` | Auto-pause (wear detection): `00` off, `01` on. The get id is assumed. |
+| `18 a2`? `[01]` | `18 22 [01 v]` | Touch gestures: `00` off, `01` on. The get id is assumed. |
+| `18 85 [01]` → `01 v` | `18 05 [01 v]` | Do-not-disturb during 2.4 GHz gaming: `01` on, `00` off. |
+| `18 90`? | `18 10 [01 ff v]` | Audio prompts: `01` on, `00` off. The meaning of `ff` is unknown (maybe "all prompts" or volume). |
+| `18 84 [01 02]` → `01 02 v` | `18 04 [01 02 v]` | Microphone mute: `01` = muted (mic off), `00` = live. Push `05 21 01` follows each change. |
+| `18 80 [01 01 00 00]`? → `01 01 01 p` | `18 00 [01 01 00 p]` | EQ preset: `01` game, `02` music, `03` movie, `1f` custom. |
+| `18 81`? | `18 01 [01 01 b0..b9]` | EQ bands, sent right after the preset. Each value is sign-magnitude dB (`81` = -1). See below. |
+| `18 9a [01]` → `01 a b` | | Connection state: `01 03 03` with both buds connected. Synapse reads it after every battery push. |
 
-It's unclear who issues the requests these frames answer, since Synapse is gone. Either the dongle polls the buds itself, or something else on the system queries it.
+Mic **volume** never reaches the device. It's the Windows endpoint volume.
+
+EQ band bytes sent with each preset (b0..b9):
+
+| Preset | Bands |
+|---|---|
+| game | `02 02 03 04 01 81 02 03 03 03` |
+| music | `02 02 81 81 81 81 01 03 03 03` |
+| movie | `03 03 03 84 84 82 02 03 03 03` |
+| custom (flat, as you left it) | `00 00 00 00 00 00 00 00 00 00` |
+
+That might be 10 bands, or fewer bands plus trailing settings, since the last three are always `03` in presets. Not yet determined.
+
+### Pushes (interrupt-IN report `0x05`)
+- `05 31 L R`: battery. Synapse responds by reading `18 9a`.
+- `05 21 01`: microphone mute state changed.
+- `05 38 01 mask`: connection mask.
+- `05 11 01`: unknown.
 
 ## Requests sent so far
 
@@ -69,7 +98,7 @@ It's unclear who issues the requests these frames answer, since Synapse is gone.
 
 Conclusion so far: SET_FEATURE `0x02` is accepted by the driver but doesn't produce answers. Feature `0x02` looks like an **outbound notification queue** that the dongle fills on its own (status changes, battery), not a request/response mailbox. Requests probably go through ff13 (output `0x06`, input `0x07`), which is untried.
 
-## Next steps
+## Next steps (superseded by the Synapse capture; kept for history)
 
 1. Send a **get** request copying an observed frame: battery, cmd `07`, sub `00`, response sub `80`. Send it as SET_FEATURE `0x02` with the same header and checksum, then read feature `0x02` back. If that doesn't respond, try output `0x06` on ff13.
 2. If gets work, sweep the read-only `cmd`/`sub` space with `sub | 0x80` to map out what exists, then figure out settings (EQ, ANC, gaming mode). Setting writes need care, because there's no Synapse capture to compare against.
