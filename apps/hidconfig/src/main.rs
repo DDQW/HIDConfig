@@ -1125,7 +1125,13 @@ fn update_display(ui: &SettingsWindow, s: &Snapshot) {
                     .map_or(0, |i| i as i32 + 1),
                 _ => 0,
             };
-            let ct = ddc.and_then(|c| c.color_temp());
+            // In fixed presets (sRGB, 6500 K, Native ...) monitors often report a
+            // stale/internal colour temperature; only show it where it's adjustable:
+            // a User preset, or a monitor without presets.
+            let preset_now = ddc.and_then(|c| c.get(vcp::COLOR_PRESET)).map(|v| v as u8);
+            let free_temp = !ddc.is_some_and(|c| c.supports(vcp::COLOR_PRESET))
+                || preset_now.is_some_and(|p| (0x0b..=0x0d).contains(&p));
+            let ct = ddc.and_then(|c| c.color_temp()).filter(|_| free_temp);
             let cur = |code| ddc.and_then(|c| c.get(code)).map(|v| v as u8);
             DisplayInfo {
                 device: x.device.clone().into(),
