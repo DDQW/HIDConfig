@@ -87,7 +87,13 @@ That might be 10 bands, or fewer bands plus trailing settings, since the last th
 - `05 38 01 mask`: connection mask.
 - `05 11 01`: unknown.
 
-## Requests sent so far
+## Hardware verification (2026-10-14, `razerctl earbuds`)
+
+- Every get reads correctly: battery, connection, ANC, mic, DND, power saving, timeout.
+- These sets were each changed, read back, and restored: ANC (ambient, off, ANC), DND, mic, timeout 15/5 min, power saving.
+- These sets were accepted by the dongle (status 02), but there's no getter to read them back: auto-pause, gestures, prompts, EQ game then flat.
+
+## Requests sent so far (before the Synapse capture)
 
 | When | Frame (from byte 6) | Result |
 |---|---|---|
