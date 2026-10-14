@@ -2112,6 +2112,40 @@ component GammaPatch inherits VerticalLayout {
     Text { text: root.label; horizontal-alignment: center; font-size: 11px; }
 }
 
+// Steps of grey on a solid background, for setting contrast (white clipping) and
+// brightness (black level) by eye.
+component StepPattern inherits VerticalLayout {
+    in property <string> title;
+    in property <string> help;
+    in property <int> background;   // 0 or 255
+    in property <int> first;        // value of the first patch
+    in property <int> step;         // +1 or -1
+    spacing: 4px;
+    Text { text: root.title; font-weight: 600; }
+    Rectangle {
+        height: 56px;
+        background: rgb(root.background, root.background, root.background);
+        HorizontalLayout {
+            padding: 8px;
+            spacing: 4px;
+            for i in 20: VerticalLayout {
+                spacing: 2px;
+                Rectangle {
+                    height: 26px;
+                    background: rgb(root.first + i * root.step, root.first + i * root.step, root.first + i * root.step);
+                }
+                Text {
+                    text: root.first + i * root.step;
+                    font-size: 9px;
+                    horizontal-alignment: center;
+                    color: root.background > 128 ? #000 : #fff;
+                }
+            }
+        }
+    }
+    Placeholder { text: root.help; font-size: 11px; }
+}
+
 component GammaTest inherits VerticalLayout {
     spacing: 8px;
     Placeholder {
@@ -2126,6 +2160,20 @@ component GammaTest inherits VerticalLayout {
         GammaPatch { label: "2.2"; level: 0.7297; }
         GammaPatch { label: "2.4"; level: 0.7492; }
         GammaPatch { label: "2.6"; level: 0.7660; }
+    }
+    StepPattern {
+        title: "White saturation (contrast)";
+        help: "Every patch from 235 to 254 should be just visible against the white. If the light ones vanish, lower the monitor's contrast until they appear.";
+        background: 255;
+        first: 235;
+        step: 1;
+    }
+    StepPattern {
+        title: "Black level (brightness)";
+        help: "The darkest patches (1-5) should be barely visible against the black. If several are invisible, raise brightness; if the black looks grey, lower it.";
+        background: 0;
+        first: 1;
+        step: 1;
     }
 }
 
@@ -2216,9 +2264,10 @@ component GraphicsCard inherits Card {
         font-size: 11px;
     }
     Row {
-        label: "Gamma test";
+        label: "Test patterns";
+        hint: "Gamma, contrast and black level";
         Button {
-            text: GfxState.show-gamma-test ? "Hide pattern" : "Show pattern";
+            text: GfxState.show-gamma-test ? "Hide patterns" : "Show patterns";
             clicked => { GfxState.show-gamma-test = !GfxState.show-gamma-test; }
         }
     }
