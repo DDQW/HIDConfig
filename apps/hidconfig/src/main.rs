@@ -94,6 +94,7 @@ fn run() -> Result<()> {
     );
     ui.global::<AppState>().set_autostart(autostart);
     wire_ui(&ui, &tx);
+    wire_windows(&ui, &tx);
 
     MenuEvent::set_event_handler(Some(|ev: MenuEvent| {
         let id = ev.id.0;
@@ -144,6 +145,81 @@ pub fn set_stages(c: &mut hidconfig_settings::Config, stages: Vec<StageDpi>, act
 /// Sends a config edit to the worker.
 fn edit(tx: &Sender<Cmd>, f: impl FnOnce(&mut hidconfig_settings::Config) + Send + 'static) {
     let _ = tx.send(Cmd::Edit(Box::new(f)));
+}
+
+fn wire_windows(ui: &SettingsWindow, tx: &Sender<Cmd>) {
+    let win = ui.global::<WinState>();
+    let t = tx.clone();
+    win.on_set(move |key, value| {
+        let (key, value) = (key.to_string(), value.to_string());
+        edit(&t, move |c| {
+            if let Err(e) = c.windows.set_field(&key, &value) {
+                log(&format!("{key} = {value}: {e:#}"));
+            }
+        });
+    });
+    win.on_reset_curve(|| {
+        if let Err(e) = hidconfig_win::mouse::reset_curve() {
+            log(&format!("reset curve: {e:#}"));
+        }
+        with_app(|app| app.refresh());
+    });
+    let t = tx.clone();
+    win.on_restore(move || {
+        let _ = t.send(Cmd::WinRestore);
+    });
+}
+
+fn update_windows(ui: &SettingsWindow, w: Option<&hidconfig_win::WindowsSettings>) {
+    let st = ui.global::<WinState>();
+    let Some(w) = w else {
+        st.set_available(false);
+        return;
+    };
+    st.set_available(true);
+    let (m, k) = (&w.mouse, &w.keyboard);
+    let int = |v: Option<u32>| v.unwrap_or(0) as i32;
+    let flag = |v: Option<bool>| v.unwrap_or(false);
+    st.set_pointer_speed(m.pointer_speed.unwrap_or(10).clamp(1, 20) as i32);
+    st.set_enhance_precision(flag(m.enhance_precision));
+    st.set_scroll_lines(int(m.scroll_lines));
+    st.set_scroll_chars(int(m.scroll_chars));
+    st.set_scroll_inactive_windows(flag(m.scroll_inactive_windows));
+    st.set_double_click_ms(int(m.double_click_ms));
+    st.set_swap_buttons(flag(m.swap_buttons));
+    st.set_double_click_area(int(m.double_click_area));
+    st.set_drag_threshold(int(m.drag_threshold));
+    st.set_hover_ms(int(m.hover_ms));
+    st.set_focus_follows_mouse(flag(m.focus_follows_mouse));
+    st.set_focus_raise(flag(m.focus_raise));
+    st.set_focus_delay_ms(int(m.focus_delay_ms));
+    st.set_hide_while_typing(flag(m.hide_while_typing));
+    st.set_locate_with_ctrl(flag(m.locate_with_ctrl));
+    st.set_trails(int(m.trails));
+    st.set_click_lock(flag(m.click_lock));
+    st.set_click_lock_ms(int(m.click_lock_ms));
+    st.set_snap_to_default_button(flag(m.snap_to_default_button));
+    st.set_mouse_keys(flag(m.mouse_keys));
+    st.set_curve_default(hidconfig_win::mouse::curve_is_default());
+
+    st.set_repeat_delay(k.repeat_delay.unwrap_or(1) as i32);
+    st.set_repeat_rate(k.repeat_rate.unwrap_or(31) as i32);
+    st.set_caret_blink_ms(int(k.caret_blink_ms));
+    st.set_custom_repeat(flag(k.custom_repeat));
+    st.set_custom_repeat_delay_ms(int(k.custom_repeat_delay_ms));
+    st.set_custom_repeat_interval_ms(int(k.custom_repeat_interval_ms));
+    st.set_sticky_keys_shortcut(flag(k.sticky_keys_shortcut));
+    st.set_filter_keys_shortcut(flag(k.filter_keys_shortcut));
+    st.set_toggle_keys_shortcut(flag(k.toggle_keys_shortcut));
+    st.set_lock_key_beep(flag(k.lock_key_beep));
+    use hidconfig_win::keyboard::LanguageHotkey as L;
+    st.set_language_hotkey_index(match k.language_hotkey {
+        Some(L::AltShift) => 0,
+        Some(L::CtrlShift) => 1,
+        Some(L::Grave) => 2,
+        Some(L::None) => 3,
+        None => -1,
+    });
 }
 
 fn wire_ui(ui: &SettingsWindow, tx: &Sender<Cmd>) {
@@ -483,4 +559,5 @@ fn update_ui(ui: &SettingsWindow, s: &Snapshot, autostart: bool) {
     ui.global::<AppState>().set_autostart(autostart);
     ui.global::<AppState>()
         .set_last_event(s.last_event.clone().into());
+    update_windows(ui, s.status.windows.as_ref());
 }

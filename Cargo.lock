@@ -2062,6 +2062,7 @@ dependencies = [
  "hidconfig-hid",
  "hidconfig-proto",
  "hidconfig-settings",
+ "hidconfig-win",
  "slint",
  "slint-build",
  "tray-icon",

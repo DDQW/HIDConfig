@@ -27,6 +27,38 @@ impl WindowsSettings {
     pub fn is_empty(&self) -> bool {
         *self == WindowsSettings::default()
     }
+
+    /// Sets one field by path, e.g. `("mouse.pointer_speed", "11")`. The value is
+    /// parsed as TOML (numbers, `true`/`false`), falling back to a string.
+    pub fn set_field(&mut self, path: &str, value: &str) -> Result<()> {
+        let (section, field) = path.split_once('.').context("expected <section>.<field>")?;
+        let value = value.trim();
+        let parsed: toml::Value = toml::from_str::<toml::Table>(&format!("v = {value}"))
+            .ok()
+            .and_then(|mut t| t.remove("v"))
+            .unwrap_or_else(|| toml::Value::String(value.to_string()));
+        let mut table = toml::Table::try_from(&*self)?;
+        let sec = table
+            .entry(section)
+            .or_insert_with(|| toml::Value::Table(Default::default()))
+            .as_table_mut()
+            .context("not a section")?;
+        sec.insert(field.to_string(), parsed);
+        *self = table.try_into().with_context(|| format!("invalid {path} = {value}"))?;
+        Ok(())
+    }
+
+    /// Fields set in `other` overwrite ours.
+    pub fn merge(&mut self, other: &WindowsSettings) -> Result<()> {
+        let mut table = toml::Table::try_from(&*self)?;
+        for (sec, v) in toml::Table::try_from(other)? {
+            if let (Some(toml::Value::Table(dst)), toml::Value::Table(src)) = (table.get_mut(&sec), v) {
+                dst.extend(src);
+            }
+        }
+        *self = table.try_into()?;
+        Ok(())
+    }
 }
 
 pub fn read() -> Result<WindowsSettings> {
@@ -74,4 +106,23 @@ pub fn restore(backup: &Path) -> Result<WindowsSettings> {
     mouse::apply(&saved.mouse)?;
     keyboard::apply(&saved.keyboard)?;
     Ok(saved)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_field_parses_types() {
+        let mut s = WindowsSettings::default();
+        s.set_field("mouse.pointer_speed", "11").unwrap();
+        s.set_field("mouse.enhance_precision", "true").unwrap();
+        s.set_field("keyboard.language_hotkey", "ctrl-shift").unwrap();
+        assert_eq!(s.mouse.pointer_speed, Some(11));
+        assert_eq!(s.mouse.enhance_precision, Some(true));
+        assert_eq!(s.keyboard.language_hotkey, Some(keyboard::LanguageHotkey::CtrlShift));
+        assert!(s.set_field("mouse.pointer_sped", "1").is_err());
+        assert!(s.set_field("mouse.pointer_speed", "fast").is_err());
+        assert_eq!(s.mouse.pointer_speed, Some(11), "failed set leaves the value alone");
+    }
 }

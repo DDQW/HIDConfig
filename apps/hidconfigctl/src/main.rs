@@ -246,29 +246,13 @@ enum WinCmd {
     },
 }
 
-/// `mouse.pointer_speed=10` -> TOML table entries, parsed into WindowsSettings.
 fn parse_assignments(items: &[String]) -> Result<hidconfig_win::WindowsSettings> {
-    let mut toml_text = String::new();
+    let mut s = hidconfig_win::WindowsSettings::default();
     for item in items {
         let (key, value) = item.split_once('=').context("expected section.key=value")?;
-        let (section, field) = key.split_once('.').context("expected mouse.<key> or keyboard.<key>")?;
-        let value = value.trim();
-        let is_literal = value.parse::<f64>().is_ok() || value == "true" || value == "false";
-        let value = if is_literal { value.to_string() } else { format!("{value:?}") };
-        toml_text.push_str(&format!("[{section}]\n{field} = {value}\n"));
+        s.set_field(key, value)?;
     }
-    // Merge repeated section headers by parsing as a generic table first.
-    let mut merged = toml::Table::new();
-    for chunk in toml_text.split("[").filter(|c| !c.is_empty()) {
-        let t: toml::Table = toml::from_str(&format!("[{chunk}"))?;
-        for (sec, v) in t {
-            let entry = merged.entry(sec).or_insert_with(|| toml::Value::Table(Default::default()));
-            if let (toml::Value::Table(dst), toml::Value::Table(src)) = (entry, v) {
-                dst.extend(src);
-            }
-        }
-    }
-    Ok(merged.try_into()?)
+    Ok(s)
 }
 
 fn win(cmd: &WinCmd) -> Result<()> {
@@ -279,13 +263,7 @@ fn win(cmd: &WinCmd) -> Result<()> {
             hidconfig_settings::apply_windows(&s)?;
             if *save {
                 let mut cfg = hidconfig_settings::Config::load()?;
-                let mut table: toml::Table = toml::Table::try_from(&cfg.windows)?;
-                for (sec, v) in toml::Table::try_from(&s)? {
-                    if let (Some(toml::Value::Table(dst)), toml::Value::Table(src)) = (table.get_mut(&sec), v) {
-                        dst.extend(src);
-                    }
-                }
-                cfg.windows = table.try_into()?;
+                cfg.windows.merge(&s)?;
                 cfg.save()?;
             }
             let now = hidconfig_win::read()?;

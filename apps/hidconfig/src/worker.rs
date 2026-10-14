@@ -15,6 +15,8 @@ pub enum Cmd {
     Edit(Box<dyn FnOnce(&mut Config) + Send>),
     /// Live mic toggle (not saved).
     MicOn(bool),
+    /// Stop managing Windows settings and put the backed-up values back.
+    WinRestore,
     Quit,
 }
 
@@ -80,6 +82,17 @@ fn run(rx: Receiver<Cmd>, publish: impl Fn(Snapshot)) {
                     format!("mic: {e:#}"),
                 )),
             },
+            Ok(Cmd::WinRestore) => {
+                let r = watcher
+                    .update_config(|c| c.windows = Default::default(), &mut on_event)
+                    .and_then(|()| hidconfig_win::restore(&hidconfig_settings::windows_backup_path()?));
+                match r {
+                    Ok(_) => on_event(Event::Applied(hidconfig_settings::Target::Windows)),
+                    Err(e) => on_event(Event::Failed(hidconfig_settings::Target::Windows, format!("restore: {e:#}"))),
+                }
+                watcher.refresh_status_soon();
+                watcher.tick(&mut on_event);
+            }
             Ok(Cmd::Quit) | Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => {
                 watcher.tick(&mut on_event);

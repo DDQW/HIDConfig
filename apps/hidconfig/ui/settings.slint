@@ -574,6 +574,457 @@ component AppCard inherits VerticalLayout {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Windows settings pages. Values shown are what Windows currently uses; every
+// change is saved to the profile and applied at once.
+
+export global WinState {
+    in property <bool> available;
+
+    // Mouse
+    in property <int> pointer-speed: 10;
+    in property <bool> enhance-precision;
+    in property <int> scroll-lines: 3;          // 0 = one screen
+    in property <int> scroll-chars: 3;
+    in property <bool> scroll-inactive-windows;
+    in property <int> double-click-ms: 500;
+    in property <bool> swap-buttons;
+    in property <int> double-click-area: 4;
+    in property <int> drag-threshold: 4;
+    in property <int> hover-ms: 400;
+    in property <bool> focus-follows-mouse;
+    in property <bool> focus-raise;
+    in property <int> focus-delay-ms;
+    in property <bool> hide-while-typing;
+    in property <bool> locate-with-ctrl;
+    in property <int> trails;
+    in property <bool> click-lock;
+    in property <int> click-lock-ms: 1200;
+    in property <bool> snap-to-default-button;
+    in property <bool> mouse-keys;
+    in property <bool> curve-default: true;
+
+    // Keyboard
+    in property <int> repeat-delay: 1;          // 0..3
+    in property <int> repeat-rate: 31;          // 0..31
+    in property <int> caret-blink-ms: 530;      // 0 = no blinking
+    in property <bool> custom-repeat;
+    in property <int> custom-repeat-delay-ms: 300;
+    in property <int> custom-repeat-interval-ms: 30;
+    in property <bool> sticky-keys-shortcut;
+    in property <bool> filter-keys-shortcut;
+    in property <bool> toggle-keys-shortcut;
+    in property <bool> lock-key-beep;
+    in property <int> language-hotkey-index: -1; // alt-shift, ctrl-shift, grave, none
+
+    /// `key` is `<section>.<field>` as in config.toml; `value` is TOML.
+    callback set(string /* key */, string /* value */);
+    callback reset-curve();
+    callback restore();
+
+    out property <[float]> speed-multipliers: [
+        0.03125, 0.0625, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0,
+        1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5];
+    out property <[string]> language-hotkey-keys: ["alt-shift", "ctrl-shift", "grave", "none"];
+}
+
+component WinSwitch inherits Row {
+    in property <string> key;
+    in property <bool> value;
+    Switch {
+        property <bool> source: root.value;
+        changed source => { self.checked = self.source; }
+        checked: root.value;
+        toggled => { WinState.set(root.key, self.checked ? "true" : "false"); }
+    }
+}
+
+component WinSpin inherits Row {
+    in property <string> key;
+    in property <int> value;
+    in property <int> minimum: 0;
+    in property <int> maximum: 10000;
+    in property <int> step: 1;
+    in property <string> unit;
+    SpinBox {
+        property <int> source: root.value;
+        changed source => { self.value = self.source; }
+        width: Theme.spin-width;
+        minimum: root.minimum;
+        maximum: root.maximum;
+        step-size: root.step;
+        value: root.value;
+        edited(v) => { WinState.set(root.key, v); }
+    }
+    if root.unit != "": Text {
+        text: root.unit;
+        color: Theme.muted;
+        vertical-alignment: center;
+    }
+}
+
+component MouseCoreCard inherits Card {
+    title: "Pointer & scrolling";
+    summary: "Speed " + WinState.pointer-speed + " · ×" + WinState.speed-multipliers[WinState.pointer-speed - 1];
+
+    WideRow {
+        label: "Pointer speed";
+        Slider {
+            property <int> source: WinState.pointer-speed;
+            changed source => { self.value = self.source; }
+            minimum: 1;
+            maximum: 20;
+            step: 1;
+            value: WinState.pointer-speed;
+            released(v) => { WinState.set("mouse.pointer_speed", round(v)); }
+        }
+        Text {
+            width: 64px;
+            text: "×" + WinState.speed-multipliers[WinState.pointer-speed - 1];
+            vertical-alignment: center;
+            horizontal-alignment: right;
+        }
+    }
+    Placeholder {
+        text: "10 is 1:1: one count from the mouse moves the pointer one pixel. For gaming, keep 10 and change DPI instead.";
+        font-size: 11px;
+    }
+    WinSwitch {
+        label: "Enhance pointer precision";
+        hint: "Windows acceleration; off for consistent aim";
+        key: "mouse.enhance_precision";
+        value: WinState.enhance-precision;
+    }
+    Row {
+        label: "Acceleration curve";
+        hint: "Registry SmoothMouseX/YCurve";
+        if WinState.curve-default: VerticalLayout {
+            alignment: center;
+            Chip { text: "Windows default"; tint: Theme.ok; }
+        }
+        if !WinState.curve-default: VerticalLayout {
+            alignment: center;
+            Chip { text: "Modified"; tint: Theme.warn; }
+        }
+        if !WinState.curve-default: Button {
+            text: "Reset";
+            clicked => { WinState.reset-curve(); }
+        }
+    }
+
+    Rectangle { height: 1px; background: Palette.border; }
+
+    WinSpin {
+        label: "Scroll lines per notch";
+        hint: "0 = one screen at a time";
+        key: "mouse.scroll_lines";
+        value: WinState.scroll-lines;
+        maximum: 100;
+    }
+    WinSpin {
+        label: "Horizontal scroll";
+        hint: "Characters per tilt";
+        key: "mouse.scroll_chars";
+        value: WinState.scroll-chars;
+        maximum: 100;
+    }
+    WinSwitch {
+        label: "Scroll inactive windows";
+        hint: "Scroll whatever is under the pointer";
+        key: "mouse.scroll_inactive_windows";
+        value: WinState.scroll-inactive-windows;
+    }
+
+    Rectangle { height: 1px; background: Palette.border; }
+
+    WinSpin {
+        label: "Double-click speed";
+        hint: "Max time between clicks";
+        key: "mouse.double_click_ms";
+        value: WinState.double-click-ms;
+        minimum: 200;
+        maximum: 900;
+        step: 10;
+        unit: "ms";
+    }
+    WinSwitch {
+        label: "Swap primary button";
+        hint: "Left-handed: right button clicks";
+        key: "mouse.swap_buttons";
+        value: WinState.swap-buttons;
+    }
+}
+
+component MouseAdvancedCard inherits Card {
+    title: "Advanced";
+    summary: "Not in Windows Settings";
+
+    WinSpin {
+        label: "Double-click area";
+        hint: "How far the 2nd click may land";
+        key: "mouse.double_click_area";
+        value: WinState.double-click-area;
+        minimum: 1;
+        maximum: 64;
+        unit: "px";
+    }
+    WinSpin {
+        label: "Drag threshold";
+        hint: "Movement before a drag starts";
+        key: "mouse.drag_threshold";
+        value: WinState.drag-threshold;
+        minimum: 1;
+        maximum: 64;
+        unit: "px";
+    }
+    WinSpin {
+        label: "Hover time";
+        hint: "Before tooltips and hover menus";
+        key: "mouse.hover_ms";
+        value: WinState.hover-ms;
+        minimum: 0;
+        maximum: 5000;
+        step: 50;
+        unit: "ms";
+    }
+
+    Rectangle { height: 1px; background: Palette.border; }
+
+    WinSwitch {
+        label: "Focus follows mouse";
+        hint: "Activate the window under the pointer";
+        key: "mouse.focus_follows_mouse";
+        value: WinState.focus-follows-mouse;
+    }
+    if WinState.focus-follows-mouse: WinSwitch {
+        label: "Raise focused window";
+        hint: "Also bring it to the front";
+        key: "mouse.focus_raise";
+        value: WinState.focus-raise;
+    }
+    if WinState.focus-follows-mouse: WinSpin {
+        label: "Focus delay";
+        key: "mouse.focus_delay_ms";
+        value: WinState.focus-delay-ms;
+        maximum: 5000;
+        step: 50;
+        unit: "ms";
+    }
+}
+
+component PointerHelpersCard inherits Card {
+    title: "Pointer helpers";
+
+    WinSwitch {
+        label: "Hide while typing";
+        key: "mouse.hide_while_typing";
+        value: WinState.hide-while-typing;
+    }
+    WinSwitch {
+        label: "Show location with Ctrl";
+        hint: "Press Ctrl to find the pointer";
+        key: "mouse.locate_with_ctrl";
+        value: WinState.locate-with-ctrl;
+    }
+    WinSpin {
+        label: "Pointer trails";
+        hint: "0 = off";
+        key: "mouse.trails";
+        value: WinState.trails;
+        maximum: 7;
+    }
+    WinSwitch {
+        label: "Snap to default button";
+        hint: "Jump to OK in new dialogs";
+        key: "mouse.snap_to_default_button";
+        value: WinState.snap-to-default-button;
+    }
+    WinSwitch {
+        label: "ClickLock";
+        hint: "Hold briefly to lock the button";
+        key: "mouse.click_lock";
+        value: WinState.click-lock;
+    }
+    if WinState.click-lock: WinSpin {
+        label: "ClickLock delay";
+        key: "mouse.click_lock_ms";
+        value: WinState.click-lock-ms;
+        minimum: 200;
+        maximum: 2200;
+        step: 100;
+        unit: "ms";
+    }
+    WinSwitch {
+        label: "Mouse Keys";
+        hint: "Move the pointer with the numpad";
+        key: "mouse.mouse_keys";
+        value: WinState.mouse-keys;
+    }
+}
+
+component KeyboardCard inherits Card {
+    title: "Typing";
+    summary: WinState.custom-repeat ? "Custom repeat active" : "";
+
+    Row {
+        label: "Repeat delay";
+        ComboBox {
+            width: Theme.combo-width;
+            model: ["Short (~250 ms)", "Medium (~500 ms)", "Long (~750 ms)", "Longest (~1 s)"];
+            property <int> source: WinState.repeat-delay;
+            changed source => { self.current-index = self.source; }
+            current-index: WinState.repeat-delay;
+            selected => { WinState.set("keyboard.repeat_delay", self.current-index); }
+        }
+    }
+    WideRow {
+        label: "Repeat rate";
+        Slider {
+            property <int> source: WinState.repeat-rate;
+            changed source => { self.value = self.source; }
+            minimum: 0;
+            maximum: 31;
+            step: 1;
+            value: WinState.repeat-rate;
+            released(v) => { WinState.set("keyboard.repeat_rate", round(v)); }
+        }
+        Text {
+            width: 64px;
+            // Windows maps 0..31 to roughly 2.5..30 repeats per second.
+            text: round(2.5 + WinState.repeat-rate * 27.5 / 31) + "/s";
+            vertical-alignment: center;
+            horizontal-alignment: right;
+        }
+    }
+    WinSpin {
+        label: "Cursor blink rate";
+        hint: "0 = no blinking";
+        key: "keyboard.caret_blink_ms";
+        value: WinState.caret-blink-ms;
+        maximum: 2000;
+        step: 10;
+        unit: "ms";
+    }
+    Row {
+        label: "Try it";
+        LineEdit {
+            width: 280px;
+            placeholder-text: "Hold a key here to test repeat";
+        }
+    }
+    Row {
+        label: "Switch input language";
+        ComboBox {
+            width: Theme.combo-width;
+            model: ["Alt + Shift", "Ctrl + Shift", "Grave accent (`)", "Not assigned"];
+            property <int> source: WinState.language-hotkey-index;
+            changed source => { self.current-index = self.source; }
+            current-index: WinState.language-hotkey-index;
+            selected => { WinState.set("keyboard.language_hotkey", "\"" + WinState.language-hotkey-keys[self.current-index] + "\""); }
+        }
+    }
+}
+
+component KeyboardAdvancedCard inherits Card {
+    title: "Advanced";
+    summary: "Not in Windows Settings";
+
+    WinSwitch {
+        label: "Custom repeat timing";
+        hint: "Exact delay/interval via FilterKeys";
+        key: "keyboard.custom_repeat";
+        value: WinState.custom-repeat;
+    }
+    if WinState.custom-repeat: WinSpin {
+        label: "Delay before repeat";
+        key: "keyboard.custom_repeat_delay_ms";
+        value: WinState.custom-repeat-delay-ms;
+        minimum: 100;
+        maximum: 2000;
+        step: 10;
+        unit: "ms";
+    }
+    if WinState.custom-repeat: WinSpin {
+        label: "Repeat interval";
+        hint: "Lower is faster";
+        key: "keyboard.custom_repeat_interval_ms";
+        value: WinState.custom-repeat-interval-ms;
+        minimum: 5;
+        maximum: 500;
+        step: 1;
+        unit: "ms";
+    }
+
+    Rectangle { height: 1px; background: Palette.border; }
+
+    Text {
+        text: "Accessibility shortcuts";
+        font-weight: 600;
+    }
+    WinSwitch {
+        label: "Sticky Keys shortcut";
+        hint: "Shift pressed 5 times";
+        key: "keyboard.sticky_keys_shortcut";
+        value: WinState.sticky-keys-shortcut;
+    }
+    WinSwitch {
+        label: "Filter Keys shortcut";
+        hint: "Right Shift held 8 s";
+        key: "keyboard.filter_keys_shortcut";
+        value: WinState.filter-keys-shortcut;
+    }
+    WinSwitch {
+        label: "Toggle Keys shortcut";
+        hint: "Num Lock held 5 s";
+        key: "keyboard.toggle_keys_shortcut";
+        value: WinState.toggle-keys-shortcut;
+    }
+    WinSwitch {
+        label: "Lock key sounds";
+        hint: "Beep on Caps / Num / Scroll Lock";
+        key: "keyboard.lock_key_beep";
+        value: WinState.lock-key-beep;
+    }
+}
+
+component RestoreCard inherits Card {
+    title: "Windows settings profile";
+    Placeholder {
+        text: "Changes here are saved in your HIDConfig profile and re-applied at start-up. Before the first change, HIDConfig saved your previous Windows values.";
+    }
+    HorizontalLayout {
+        alignment: end;
+        Button {
+            text: "Restore previous Windows settings";
+            clicked => { WinState.restore(); }
+        }
+    }
+}
+
+component NavTab inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked();
+    width: label.preferred-width + 28px;
+    height: 40px;
+    label := Text {
+        text: root.text;
+        font-weight: root.active ? 600 : 400;
+        color: root.active ? Palette.foreground : Theme.muted;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+    Rectangle {
+        y: parent.height - 3px;
+        height: 3px;
+        background: root.active ? Theme.ok : transparent;
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
 export component SettingsWindow inherits Window {
     title: "HIDConfig";
     icon: @image-url("../../../packaging/hidconfig.png");
@@ -583,14 +1034,34 @@ export component SettingsWindow inherits Window {
     min-height: 300px;
     background: Palette.background;
 
+    // 0 = devices, 1 = mouse, 2 = keyboard
+    in-out property <int> page;
     // Two columns once there is room for two readable cards side by side.
     private property <bool> wide: self.width >= 1080px;
 
     VerticalLayout {
+        // Navigation
+        Rectangle {
+            background: Palette.alternate-background;
+            HorizontalLayout {
+                alignment: center;
+                spacing: 4px;
+                NavTab { text: "Devices"; active: root.page == 0; clicked => { root.page = 0; } }
+                NavTab { text: "Mouse"; active: root.page == 1; clicked => { root.page = 1; } }
+                NavTab { text: "Keyboard"; active: root.page == 2; clicked => { root.page = 2; } }
+            }
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Palette.border;
+            }
+        }
+
         ScrollView {
             vertical-stretch: 1;
             VerticalLayout {
-                if root.wide: HorizontalLayout {
+                // ---- Devices ----
+                if root.page == 0 && root.wide: HorizontalLayout {
                     alignment: center;
                     padding: 20px;
                     spacing: 16px;
@@ -609,7 +1080,7 @@ export component SettingsWindow inherits Window {
                         AppCard { }
                     }
                 }
-                if !root.wide: HorizontalLayout {
+                if root.page == 0 && !root.wide: HorizontalLayout {
                     alignment: center;
                     VerticalLayout {
                         max-width: 640px;
@@ -620,6 +1091,79 @@ export component SettingsWindow inherits Window {
                         ViperCard { }
                         BudsCard { }
                         AppCard { }
+                    }
+                }
+
+                // ---- Mouse ----
+                if root.page == 1 && !WinState.available: Placeholder {
+                    text: "Reading Windows settings…";
+                }
+                if root.page == 1 && WinState.available && root.wide: HorizontalLayout {
+                    alignment: center;
+                    padding: 20px;
+                    spacing: 16px;
+                    VerticalLayout {
+                        max-width: 640px;
+                        horizontal-stretch: 1;
+                        alignment: start;
+                        MouseCoreCard { }
+                    }
+                    VerticalLayout {
+                        max-width: 640px;
+                        horizontal-stretch: 1;
+                        alignment: start;
+                        spacing: 16px;
+                        MouseAdvancedCard { }
+                        PointerHelpersCard { }
+                        RestoreCard { }
+                    }
+                }
+                if root.page == 1 && WinState.available && !root.wide: HorizontalLayout {
+                    alignment: center;
+                    VerticalLayout {
+                        max-width: 640px;
+                        min-width: 420px;
+                        horizontal-stretch: 1;
+                        padding: 20px;
+                        spacing: 16px;
+                        MouseCoreCard { }
+                        MouseAdvancedCard { }
+                        PointerHelpersCard { }
+                        RestoreCard { }
+                    }
+                }
+
+                // ---- Keyboard ----
+                if root.page == 2 && WinState.available && root.wide: HorizontalLayout {
+                    alignment: center;
+                    padding: 20px;
+                    spacing: 16px;
+                    VerticalLayout {
+                        max-width: 640px;
+                        horizontal-stretch: 1;
+                        alignment: start;
+                        KeyboardCard { }
+                    }
+                    VerticalLayout {
+                        max-width: 640px;
+                        horizontal-stretch: 1;
+                        alignment: start;
+                        spacing: 16px;
+                        KeyboardAdvancedCard { }
+                        RestoreCard { }
+                    }
+                }
+                if root.page == 2 && WinState.available && !root.wide: HorizontalLayout {
+                    alignment: center;
+                    VerticalLayout {
+                        max-width: 640px;
+                        min-width: 420px;
+                        horizontal-stretch: 1;
+                        padding: 20px;
+                        spacing: 16px;
+                        KeyboardCard { }
+                        KeyboardAdvancedCard { }
+                        RestoreCard { }
                     }
                 }
             }
