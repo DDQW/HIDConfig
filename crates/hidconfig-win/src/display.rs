@@ -34,6 +34,8 @@ pub struct Display {
     pub device: String,
     /// Monitor name from EDID, e.g. "PL4373UH".
     pub name: String,
+    /// EDID manufacturer (PnP id), e.g. "IVM".
+    pub vendor: String,
     /// Monitor device key (registry path), used for colour profiles.
     pub monitor_key: Option<String>,
     pub primary: bool,
@@ -256,6 +258,20 @@ fn source_name(p: &Path) -> Option<String> {
     // SAFETY: header size matches the struct.
     (unsafe { DisplayConfigGetDeviceInfo(&mut v.header) } == 0)
         .then(|| from_wide(&v.viewGdiDeviceName))
+}
+
+fn target_vendor(p: &Path) -> Option<String> {
+    let mut v = DISPLAYCONFIG_TARGET_DEVICE_NAME {
+        header: header::<DISPLAYCONFIG_TARGET_DEVICE_NAME>(
+            DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME.0,
+            p.target.adapterId,
+            p.target.id,
+        ),
+        ..Default::default()
+    };
+    // SAFETY: header size matches the struct.
+    (unsafe { DisplayConfigGetDeviceInfo(&mut v.header) } == 0 && v.edidManufactureId != 0)
+        .then(|| crate::icc::pnp_id(v.edidManufactureId))
 }
 
 fn target_name(p: &Path) -> Option<String> {
@@ -650,6 +666,8 @@ pub fn parse_caps(caps: &str) -> BTreeMap<u8, Vec<u8>> {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Ddc {
+    /// Model from the capability string (`model(...)`), often the retail name.
+    pub model: Option<String>,
     /// Supported codes -> allowed values (empty = continuous).
     pub caps: BTreeMap<u8, Vec<u8>>,
     /// Current (value, maximum) of the continuous controls we show.
@@ -758,19 +776,29 @@ thread_local! {
 fn ddc_for(h: HMONITOR, key: &str) -> Option<Ddc> {
     let phys = physical(h)?;
     let m = phys.0.first()?;
-    let caps = CAPS.with(|c| {
+    let raw = CAPS.with(|c| {
         c.borrow_mut()
             .entry(key.to_string())
             .or_insert_with(|| read_caps(m))
             .clone()
     })?;
-    let caps = parse_caps(&caps);
+    let caps = parse_caps(&raw);
+    let model = raw
+        .split("model(")
+        .nth(1)
+        .and_then(|r| r.split(')').next())
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty());
     let values = SHOWN
         .iter()
         .filter(|c| caps.contains_key(c))
         .filter_map(|&c| read_vcp(m, c).map(|(cur, max)| (c, (to_menu(m, c, cur, max), max))))
         .collect();
-    Some(Ddc { caps, values })
+    Some(Ddc {
+        model,
+        caps,
+        values,
+    })
 }
 
 // Some monitors report the *effective* value over DDC/CI (e.g. backlight after an
@@ -961,6 +989,7 @@ pub fn displays(with_ddc: bool) -> Result<Vec<Display>> {
             None
         };
         out.push(Display {
+            vendor: path.and_then(target_vendor).unwrap_or_default(),
             monitor_key: monitor_key(&device),
             modes: modes(&device),
             device,

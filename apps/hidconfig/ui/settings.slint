@@ -1559,6 +1559,10 @@ export struct DisplayInfo {
     reset-all: bool,
     reset-color: bool,
     reset-picture: bool,
+    signal: string,          // e.g. "8-bit RGB"
+    sdr-nits: int,           // -1 = HDR off
+    profiles: [string],      // "System default (x.icm)" first
+    profile-index: int,
 }
 
 export global DisplayState {
@@ -1673,6 +1677,24 @@ component DisplayCard inherits Card {
             selected => { DisplayState.rotation(root.d.device, self.current-index); }
         }
     }
+    if root.d.signal != "": Row {
+        label: "Signal";
+        hint: "What the cable carries";
+        Text { text: root.d.signal; vertical-alignment: center; }
+    }
+    if root.d.sdr-nits >= 0: WideRow {
+        label: "SDR content brightness";
+        Slider {
+            property <int> source: root.d.sdr-nits;
+            changed source => { self.value = self.source; }
+            minimum: 80;
+            maximum: 480;
+            step: 4;
+            value: root.d.sdr-nits;
+            released(v) => { GfxState.sdr(root.d.device, round(v)); }
+        }
+        Text { width: 64px; text: root.d.sdr-nits + " nits"; horizontal-alignment: right; vertical-alignment: center; }
+    }
     if root.d.hdr-supported: Row {
         label: "HDR";
         Switch {
@@ -1680,6 +1702,58 @@ component DisplayCard inherits Card {
             changed source => { self.checked = self.source; }
             checked: root.d.hdr-on;
             toggled => { DisplayState.hdr(root.d.device, self.checked); }
+        }
+    }
+
+    Row {
+        label: "Colour profile";
+        hint: "ICC profile Windows uses";
+        ComboBox {
+            width: 260px;
+            model: root.d.profiles;
+            property <int> source: root.d.profile-index;
+            changed source => { self.current-index = self.source; }
+            current-index: root.d.profile-index;
+            selected => { GfxState.set-profile(root.d.device, self.current-index - 1); }
+        }
+    }
+    Row {
+        label: "";
+        Button {
+            text: GfxState.finder-busy && GfxState.finder-device == root.d.device ? "Searching…" : "Find online";
+            enabled: !GfxState.finder-busy;
+            clicked => { GfxState.find-online(root.d.device); }
+        }
+        Button { text: "Install from file…"; clicked => { GfxState.install-file(root.d.device, ""); } }
+        Button { text: "Search the web"; clicked => { GfxState.web-search(root.d.device); } }
+    }
+    if GfxState.finder-device == root.d.device && GfxState.finder-status != "": Placeholder {
+        text: GfxState.finder-status;
+        font-size: 11px;
+    }
+    if GfxState.finder-device == root.d.device: VerticalLayout {
+        spacing: 4px;
+        for h in GfxState.finder-hits: HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                Text { text: h.title; overflow: elide; }
+                Text { text: h.detail; color: Theme.muted; font-size: 11px; }
+            }
+            Button {
+                text: "Get";
+                enabled: !GfxState.finder-busy;
+                clicked => { GfxState.fetch(h.id); }
+            }
+        }
+        for f in GfxState.finder-files: HorizontalLayout {
+            spacing: 8px;
+            Text { horizontal-stretch: 1; text: f; overflow: elide; vertical-alignment: center; font-size: 11px; }
+            Button {
+                text: "Install & use";
+                primary: true;
+                clicked => { GfxState.install-file(root.d.device, f); }
+            }
         }
     }
 
@@ -1902,6 +1976,192 @@ component ConfirmBanner inherits Rectangle {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Graphics & comfort card, gamma test pattern, colour-profile finder
+
+export struct ProfileHit {
+    id: string,
+    title: string,
+    detail: string,
+}
+
+export global GfxState {
+    in property <bool> auto-hdr;
+    in property <bool> vrr;
+    in property <bool> windowed-opt;
+    in property <bool> gpu-scheduling-known;
+    in property <bool> gpu-scheduling;
+    in property <int> warm-kelvin: 6500;
+    in property <float> gamma: 1.0;
+    in property <int> sleep-index: -1;       // into sleep-names
+    out property <[string]> sleep-names: ["Never", "1 min", "2 min", "3 min", "5 min", "10 min", "15 min", "20 min", "30 min", "45 min", "1 hour", "2 hours", "5 hours"];
+    out property <[int]> sleep-minutes: [0, 1, 2, 3, 5, 10, 15, 20, 30, 45, 60, 120, 300];
+    in-out property <bool> show-gamma-test;
+
+    callback gpu-scheduling-changed(bool);
+    callback displays-off();
+
+    // Colour-profile finder (one monitor at a time)
+    in-out property <string> finder-device;
+    in property <bool> finder-busy;
+    in property <string> finder-status;
+    in property <[ProfileHit]> finder-hits;
+    in property <[string]> finder-files;
+    callback find-online(string /* device */);
+    callback fetch(string /* catalog id */);
+    callback install-file(string /* device */, string /* path, "" = ask */);
+    callback web-search(string /* device */);
+    callback set-profile(string /* device */, int /* index into profiles, -1 = system */);
+    callback sdr(string /* device */, int /* nits */);
+}
+
+component GammaPatch inherits VerticalLayout {
+    in property <string> label;
+    in property <float> level;      // 0..1 grey
+    spacing: 4px;
+    Rectangle {
+        width: 96px;
+        height: 96px;
+        background: #000;
+        clip: true;
+        // Solid patch inside a field of 1-device-pixel black/white lines.
+        for i in 400: Rectangle {
+            x: 0;
+            y: i * 2phx;
+            width: parent.width;
+            height: 1phx;
+            background: #fff;
+        }
+        Rectangle {
+            x: 24px;
+            y: 24px;
+            width: 48px;
+            height: 48px;
+            background: rgb(root.level * 255, root.level * 255, root.level * 255);
+        }
+    }
+    Text { text: root.label; horizontal-alignment: center; font-size: 11px; }
+}
+
+component GammaTest inherits VerticalLayout {
+    spacing: 8px;
+    Placeholder {
+        text: "Step back or squint: the patch that disappears into its striped frame shows your display's real gamma. Aim for 2.2. Turn the blue-light filter and software gamma off first, and keep scaling effects off (the stripes are exactly one screen pixel).";
+        font-size: 11px;
+    }
+    HorizontalLayout {
+        alignment: center;
+        spacing: 10px;
+        GammaPatch { label: "1.8"; level: 0.6804; }
+        GammaPatch { label: "2.0"; level: 0.7071; }
+        GammaPatch { label: "2.2"; level: 0.7297; }
+        GammaPatch { label: "2.4"; level: 0.7492; }
+        GammaPatch { label: "2.6"; level: 0.7660; }
+    }
+}
+
+component GraphicsCard inherits Card {
+    title: "Graphics & comfort";
+
+    WinSwitch {
+        label: "Auto HDR";
+        hint: "HDR for DirectX 11/12 games (HDR on)";
+        key: "graphics.auto_hdr";
+        value: GfxState.auto-hdr;
+    }
+    WinSwitch {
+        label: "Variable refresh rate";
+        hint: "VRR for games that don't support it";
+        key: "graphics.variable_refresh_rate";
+        value: GfxState.vrr;
+    }
+    WinSwitch {
+        label: "Windowed game optimisations";
+        hint: "Lower latency in windowed games";
+        key: "graphics.windowed_game_optimizations";
+        value: GfxState.windowed-opt;
+    }
+    if GfxState.gpu-scheduling-known: Row {
+        label: "GPU scheduling";
+        hint: "Hardware-accelerated; admin + restart";
+        Switch {
+            property <bool> source: GfxState.gpu-scheduling;
+            changed source => { self.checked = self.source; }
+            checked: GfxState.gpu-scheduling;
+            toggled => { GfxState.gpu-scheduling-changed(self.checked); }
+        }
+    }
+
+    Rectangle { height: 1px; background: Palette.border; }
+
+    Row {
+        label: "Blue-light filter";
+        hint: "Warmer colours on every display";
+        Switch {
+            property <bool> source: GfxState.warm-kelvin < 6500;
+            changed source => { self.checked = self.source; }
+            checked: GfxState.warm-kelvin < 6500;
+            toggled => { WinState.set("graphics.warm_filter_kelvin", self.checked ? 4500 : 6500); }
+        }
+    }
+    if GfxState.warm-kelvin < 6500: WideRow {
+        label: "Warmth";
+        Slider {
+            property <int> source: GfxState.warm-kelvin;
+            changed source => { self.value = self.source; }
+            minimum: 1900;
+            maximum: 6400;
+            step: 100;
+            value: GfxState.warm-kelvin;
+            released(v) => { WinState.set("graphics.warm_filter_kelvin", round(v / 100) * 100); }
+        }
+        Text { width: 64px; text: GfxState.warm-kelvin + " K"; horizontal-alignment: right; vertical-alignment: center; }
+    }
+    WideRow {
+        label: "Gamma (software)";
+        Slider {
+            property <float> source: GfxState.gamma;
+            changed source => { self.value = self.source; }
+            minimum: 0.5;
+            maximum: 2.0;
+            step: 0.05;
+            value: GfxState.gamma;
+            released(v) => { WinState.set("graphics.gamma", round(v * 20) / 20); }
+        }
+        Text { width: 64px; text: round(GfxState.gamma * 100) / 100; horizontal-alignment: right; vertical-alignment: center; }
+    }
+    Placeholder {
+        text: "1.0 = unchanged. Use the monitor's own gamma setting first; this adjusts on top of it.";
+        font-size: 11px;
+    }
+    Row {
+        label: "Gamma test";
+        Button {
+            text: GfxState.show-gamma-test ? "Hide pattern" : "Show pattern";
+            clicked => { GfxState.show-gamma-test = !GfxState.show-gamma-test; }
+        }
+    }
+    if GfxState.show-gamma-test: GammaTest { }
+
+    Rectangle { height: 1px; background: Palette.border; }
+
+    Row {
+        label: "Turn displays off after";
+        ComboBox {
+            width: Theme.combo-width;
+            model: GfxState.sleep-names;
+            property <int> source: GfxState.sleep-index;
+            changed source => { self.current-index = self.source; }
+            current-index: GfxState.sleep-index;
+            selected => { WinState.set("graphics.display_off_minutes", GfxState.sleep-minutes[self.current-index]); }
+        }
+    }
+    Row {
+        label: "";
+        Button { text: "Turn displays off now"; clicked => { GfxState.displays-off(); } }
+    }
+}
+
 component NavTab inherits Rectangle {
     in property <string> text;
     in property <bool> active;
@@ -2105,6 +2365,7 @@ export component SettingsWindow inherits Window {
                         if DisplayState.confirm-pending: ConfirmBanner { }
                         for d in DisplayState.displays: DisplayCard { d: d; }
                         if DisplayState.displays.length == 0: Placeholder { text: "Reading displays…"; }
+                        GraphicsCard { }
                     }
                 }
 

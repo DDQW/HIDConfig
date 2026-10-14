@@ -98,6 +98,7 @@ fn run() -> Result<()> {
     wire_audio(&ui, &tx);
     wire_pads(&ui);
     wire_display(&ui, &tx);
+    wire_graphics(&ui, &tx);
 
     MenuEvent::set_event_handler(Some(|ev: MenuEvent| {
         let id = ev.id.0;
@@ -865,6 +866,190 @@ fn wire_display(ui: &SettingsWindow, tx: &Sender<Cmd>) {
     });
 }
 
+thread_local! {
+    /// Catalog hits and downloaded profile files of the current finder run.
+    static FINDER: RefCell<(Vec<hidconfig_win::icc::CatalogHit>, Vec<std::path::PathBuf>)> = RefCell::default();
+}
+
+fn finder_update(w: &slint::Weak<SettingsWindow>, busy: bool, status: String) {
+    let w = w.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(ui) = w.upgrade() else { return };
+        let g = ui.global::<GfxState>();
+        g.set_finder_busy(busy);
+        g.set_finder_status(status.into());
+        FINDER.with(|f| {
+            let f = f.borrow();
+            let hits: Vec<ProfileHit> =
+                f.0.iter()
+                    .map(|h| ProfileHit {
+                        id: h.id.clone().into(),
+                        title: h.title.clone().into(),
+                        detail: format!("{} · {} · {}", h.products, h.date, h.size).into(),
+                    })
+                    .collect();
+            g.set_finder_hits(slint::ModelRc::new(slint::VecModel::from(hits)));
+            let files: Vec<slint::SharedString> =
+                f.1.iter().map(|p| p.display().to_string().into()).collect();
+            g.set_finder_files(slint::ModelRc::new(slint::VecModel::from(files)));
+        });
+    });
+}
+
+fn wire_graphics(ui: &SettingsWindow, tx: &Sender<Cmd>) {
+    use hidconfig_win::{display as d, graphics as g, icc};
+    let gs = ui.global::<GfxState>();
+    gs.on_displays_off(g::displays_off);
+    let t = tx.clone();
+    gs.on_gpu_scheduling_changed(move |on| {
+        if let Err(e) = platform::run_elevated_ctl(&[
+            "display",
+            "gpu-scheduling",
+            if on { "on" } else { "off" },
+        ]) {
+            log(&format!("GPU scheduling: {e:#}"));
+        }
+        let _ = t.send(Cmd::RefreshStatus);
+    });
+    let t = tx.clone();
+    gs.on_sdr(move |dev, nits| {
+        let dev = dev.to_string();
+        display_op(&t, move || d::set_sdr_brightness(&dev, nits.max(80) as u32));
+    });
+    let t = tx.clone();
+    gs.on_set_profile(move |dev, index| {
+        let Some((key, profile)) = with_display(&dev, |x| {
+            let key = x.monitor_key.clone()?;
+            let profile = (index >= 0)
+                .then(|| {
+                    g::color_profiles(&key)
+                        .installed
+                        .get(index as usize)
+                        .cloned()
+                })
+                .flatten();
+            Some((key, profile))
+        }) else {
+            return;
+        };
+        display_op(&t, move || g::set_color_profile(&key, profile.as_deref()));
+    });
+    gs.on_web_search(|dev| {
+        if let Some((vendor, model)) = with_display(&dev, |x| {
+            Some((icc::vendor_name(&x.vendor).to_string(), x.name.clone()))
+        })
+            && let Err(e) = icc::web_search(&vendor, &model) {
+                log(&format!("web search: {e:#}"));
+            }
+    });
+    let w = ui.as_weak();
+    gs.on_find_online(move |dev| {
+        let Some((vendor, models)) = with_display(&dev, |x| {
+            let mut m = vec![x.name.clone()];
+            if let Some(model) = x.ddc.as_ref().and_then(|d| d.model.clone()) {
+                m.push(model);
+            }
+            Some((icc::vendor_name(&x.vendor).to_string(), m))
+        }) else {
+            return;
+        };
+        if let Some(ui) = w.upgrade() {
+            ui.global::<GfxState>().set_finder_device(dev.clone());
+        }
+        FINDER.with(|f| *f.borrow_mut() = Default::default());
+        finder_update(&w, true, format!("Searching the Microsoft Update Catalog for {vendor} {}…", models.join(" / ")));
+        let w = w.clone();
+        std::thread::spawn(move || {
+            let mut hits: Vec<icc::CatalogHit> = Vec::new();
+            let mut error = None;
+            for m in &models {
+                match icc::search_for_monitor(&vendor, m) {
+                    Ok(found) => {
+                        for h in found {
+                            if !hits.iter().any(|x| x.id == h.id) {
+                                hits.push(h);
+                            }
+                        }
+                    }
+                    Err(e) => error = Some(format!("{e:#}")),
+                }
+            }
+            let status = match (&error, hits.len()) {
+                (Some(e), 0) => format!("Search failed: {e}"),
+                (_, 0) => "Nothing in the Microsoft Update Catalog for this model. Try \"Search the web\" for the maker's download page, then \"Install from file…\".".into(),
+                (_, n) => format!("{n} package(s) found. \"Get\" downloads one from Microsoft (a few KB) and shows the profiles inside."),
+            };
+            let _ = slint::invoke_from_event_loop(move || FINDER.with(|f| f.borrow_mut().0 = hits));
+            finder_update(&w, false, status);
+        });
+    });
+    let w = ui.as_weak();
+    gs.on_fetch(move |id| {
+        finder_update(&w, true, "Downloading from Microsoft…".into());
+        let w = w.clone();
+        let id = id.to_string();
+        std::thread::spawn(move || {
+            let (files, status) = match icc::fetch_profiles(&id) {
+                Ok(f) if f.is_empty() => (f, "That package contains no colour profile.".to_string()),
+                Ok(f) => {
+                    let n = f.len();
+                    (f, format!("{n} profile(s) in the package. \"Install & use\" needs administrator rights once."))
+                }
+                Err(e) => (vec![], format!("Download failed: {e:#}")),
+            };
+            let _ = slint::invoke_from_event_loop(move || FINDER.with(|f| f.borrow_mut().1 = files));
+            finder_update(&w, false, status);
+        });
+    });
+    let (w, t) = (ui.as_weak(), tx.clone());
+    gs.on_install_file(move |dev, path| {
+        let path = if path.is_empty() {
+            match rfd::FileDialog::new()
+                .set_title("Choose an ICC colour profile")
+                .add_filter("Colour profiles", &["icm", "icc"])
+                .pick_file()
+            {
+                Some(p) => p.display().to_string(),
+                None => return,
+            }
+        } else {
+            path.to_string()
+        };
+        let dev = dev.to_string();
+        let r =
+            platform::run_elevated_ctl(&["display", "install-profile", &path, "--display", &dev]);
+        let status = match r {
+            Ok(()) => "Profile installed and set as this monitor's default.".to_string(),
+            Err(e) => format!("Install failed: {e:#}"),
+        };
+        if let Some(ui) = w.upgrade() {
+            ui.global::<GfxState>().set_finder_device(dev.into());
+        }
+        finder_update(&w, false, status);
+        let _ = t.send(Cmd::RefreshStatus);
+    });
+}
+
+fn update_graphics(ui: &SettingsWindow, s: &Snapshot) {
+    let gs = ui.global::<GfxState>();
+    if let Some(gr) = s.status.windows.as_ref().map(|w| &w.graphics) {
+        gs.set_auto_hdr(gr.auto_hdr.unwrap_or(false));
+        gs.set_vrr(gr.variable_refresh_rate.unwrap_or(false));
+        gs.set_windowed_opt(gr.windowed_game_optimizations.unwrap_or(true));
+        gs.set_warm_kelvin(gr.warm_filter_kelvin.unwrap_or(6500) as i32);
+        gs.set_gamma(gr.gamma.unwrap_or(1.0) as f32);
+        let minutes = [0, 1, 2, 3, 5, 10, 15, 20, 30, 45, 60, 120, 300];
+        gs.set_sleep_index(
+            gr.display_off_minutes
+                .and_then(|m| minutes.iter().position(|&x| x == m))
+                .map_or(-1, |i| i as i32),
+        );
+    }
+    let sched = hidconfig_win::graphics::gpu_scheduling();
+    gs.set_gpu_scheduling_known(sched.is_some());
+    gs.set_gpu_scheduling(sched.unwrap_or(false));
+}
+
 fn update_display(ui: &SettingsWindow, s: &Snapshot) {
     use hidconfig_win::display::{self as d, vcp};
     let st = ui.global::<DisplayState>();
@@ -895,6 +1080,26 @@ fn update_display(ui: &SettingsWindow, s: &Snapshot) {
             let presets = list(vcp::COLOR_PRESET);
             let inputs = list(vcp::INPUT);
             let langs = list(vcp::OSD_LANGUAGE);
+            let cp = x
+                .monitor_key
+                .as_deref()
+                .map(hidconfig_win::graphics::color_profiles);
+            let mut profile_names = vec![match &cp {
+                Some(c) if !c.per_user => format!(
+                    "System default ({})",
+                    c.default.as_deref().unwrap_or("none")
+                ),
+                _ => "System default".to_string(),
+            }];
+            profile_names.extend(cp.iter().flat_map(|c| c.installed.clone()));
+            let profile_index = match &cp {
+                Some(c) if c.per_user => c
+                    .default
+                    .as_ref()
+                    .and_then(|d| c.installed.iter().position(|p| p.eq_ignore_ascii_case(d)))
+                    .map_or(0, |i| i as i32 + 1),
+                _ => 0,
+            };
             let ct = ddc.and_then(|c| c.color_temp());
             let cur = |code| ddc.and_then(|c| c.get(code)).map(|v| v as u8);
             DisplayInfo {
@@ -965,6 +1170,23 @@ fn update_display(ui: &SettingsWindow, s: &Snapshot) {
                 reset_all: ddc.is_some_and(|c| c.supports(vcp::RESET_ALL)),
                 reset_color: ddc.is_some_and(|c| c.supports(vcp::RESET_COLOR)),
                 reset_picture: ddc.is_some_and(|c| c.supports(vcp::RESET_BRIGHTNESS_CONTRAST)),
+                signal: x
+                    .hdr_info
+                    .as_ref()
+                    .map_or(String::new(), |h| {
+                        format!("{}-bit {}", h.bits_per_channel, h.encoding)
+                    })
+                    .into(),
+                sdr_nits: if x.hdr_on {
+                    x.hdr_info
+                        .as_ref()
+                        .and_then(|h| h.sdr_nits)
+                        .map_or(-1, |n| n as i32)
+                } else {
+                    -1
+                },
+                profiles: keep(prev.map(|p| p.profiles.clone()), profile_names.clone()),
+                profile_index,
                 input_index: cur(vcp::INPUT)
                     .and_then(|c| inputs.iter().position(|&v| v == c))
                     .map_or(-1, |i| i as i32),
@@ -1401,4 +1623,5 @@ fn update_ui(ui: &SettingsWindow, s: &Snapshot, autostart: bool) {
     update_audio(ui, s);
     update_pads(ui, s);
     update_display(ui, s);
+    update_graphics(ui, s);
 }

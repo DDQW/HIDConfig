@@ -101,7 +101,17 @@ pub fn run_elevated_ctl(args: &[&str]) -> Result<()> {
     anyhow::ensure!(exe.exists(), "{} not found", exe.display());
     let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
     let file = wide(&exe.to_string_lossy());
-    let params = wide(&args.join(" "));
+    let quoted: Vec<String> = args
+        .iter()
+        .map(|a| {
+            if a.contains(' ') || a.is_empty() {
+                format!("\"{a}\"")
+            } else {
+                a.to_string()
+            }
+        })
+        .collect();
+    let params = wide(&quoted.join(" "));
     let mut info = SHELLEXECUTEINFOW {
         cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
         fMask: SEE_MASK_NOCLOSEPROCESS,

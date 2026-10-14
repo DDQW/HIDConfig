@@ -8,6 +8,7 @@ mod devices;
 pub mod display;
 pub mod gamepad;
 pub mod graphics;
+pub mod icc;
 pub mod keyboard;
 pub mod mouse;
 mod reg;

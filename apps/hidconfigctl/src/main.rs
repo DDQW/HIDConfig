@@ -331,6 +331,16 @@ enum DisplayCmd {
         display: String,
         profile: Option<String>,
     },
+    /// Search the Microsoft Update Catalog for this monitor's driver/colour profile.
+    FindProfile { display: String },
+    /// Download a catalog entry (id from find-profile) and list the profiles in it.
+    GetProfile { id: String },
+    /// Install an .icm/.icc file (needs admin) and, with --display, make it that monitor's default.
+    InstallProfile {
+        path: std::path::PathBuf,
+        #[arg(long)]
+        display: Option<String>,
+    },
     /// SDR content brightness while HDR is on (80-480 nits).
     Sdr { display: String, nits: u32 },
     /// Turn all displays off now.
@@ -472,6 +482,55 @@ fn display(cmd: &DisplayCmd) -> Result<()> {
                 }
             );
             println!("installed: {}", c.installed.join(", "));
+        }
+        DisplayCmd::FindProfile { display } => {
+            use hidconfig_win::icc;
+            let dev = display_device(display);
+            let x = d::displays(true)?
+                .into_iter()
+                .find(|x| x.device == dev)
+                .context("no such display")?;
+            let vendor = icc::vendor_name(&x.vendor);
+            let mut models = vec![x.name.clone()];
+            if let Some(m) = x.ddc.as_ref().and_then(|d| d.model.clone()) {
+                models.push(m);
+            }
+            println!("searching for {vendor} {}", models.join(" / "));
+            let mut hits = Vec::new();
+            for m in &models {
+                for h in icc::search_for_monitor(vendor, m)? {
+                    if !hits.iter().any(|x: &icc::CatalogHit| x.id == h.id) {
+                        hits.push(h);
+                    }
+                }
+            }
+            if hits.is_empty() {
+                println!("nothing in the Microsoft Update Catalog for this model");
+            }
+            for h in hits {
+                println!("{}  {}  ({}, {})", h.id, h.title, h.date, h.size);
+            }
+        }
+        DisplayCmd::GetProfile { id } => {
+            for p in hidconfig_win::icc::fetch_profiles(id)? {
+                println!("{}", p.display());
+            }
+        }
+        DisplayCmd::InstallProfile { path, display } => {
+            let name = hidconfig_win::icc::install(path)?;
+            println!("installed {name}");
+            if let Some(dsp) = display {
+                let dev = display_device(dsp);
+                let x = d::displays(false)?
+                    .into_iter()
+                    .find(|x| x.device == dev)
+                    .context("no such display")?;
+                hidconfig_win::graphics::set_color_profile(
+                    &x.monitor_key.context("no monitor key")?,
+                    Some(&name),
+                )?;
+                println!("{name} is now the default for {}", x.name);
+            }
         }
         DisplayCmd::Sdr { display, nits } => {
             d::set_sdr_brightness(&display_device(display), *nits)?;

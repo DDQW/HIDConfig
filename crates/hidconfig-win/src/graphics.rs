@@ -451,11 +451,10 @@ pub fn set_color_ramp(kelvin: u32, gamma: f64) -> Result<()> {
     let gamma = gamma.clamp(0.3, 3.0);
     let (r, g, b) = kelvin_to_rgb(kelvin.clamp(1900, 6500));
     let mut ramp = [[0u16; 256]; 3];
-    for i in 0..256 {
-        let base = (i as f64 / 255.0).powf(1.0 / gamma) * 65535.0;
-        ramp[0][i] = (base * r) as u16;
-        ramp[1][i] = (base * g) as u16;
-        ramp[2][i] = (base * b) as u16;
+    for (channel, mult) in ramp.iter_mut().zip([r, g, b]) {
+        for (i, v) in channel.iter_mut().enumerate() {
+            *v = ((i as f64 / 255.0).powf(1.0 / gamma) * 65535.0 * mult) as u16;
+        }
     }
     let mut failed = Vec::new();
     for (name, hdc) in display_dcs() {
