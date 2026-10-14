@@ -1,0 +1,10 @@
+[package]
+name = "hidconfig-hid"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+hidapi = "2.6.7"
+hidconfig-proto = { version = "0.1.0", path = "../hidconfig-proto" }

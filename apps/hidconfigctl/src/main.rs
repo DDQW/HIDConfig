@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use razer_hid::{Device, RAZER_VID, hidapi::HidApi};
-use razer_proto::extended::Effect;
+use hidconfig_hid::{Device, RAZER_VID, hidapi::HidApi};
+use hidconfig_proto::extended::Effect;
 
 #[derive(Parser)]
 #[command(about = "Control Razer devices without Synapse")]
@@ -85,7 +85,7 @@ fn main() -> Result<()> {
         Cmd::Watch => return watch(),
         _ => {}
     }
-    let devices: Vec<Device> = razer_hid::open_all(&api)
+    let devices: Vec<Device> = hidconfig_hid::open_all(&api)
         .into_iter()
         .collect::<Result<_>>()?;
     if devices.is_empty() {
@@ -140,7 +140,7 @@ fn run(dev: &Device, cmd: &Cmd) -> Result<()> {
                 .iter()
                 .map(|s| parse_xy(s))
                 .collect::<Result<Vec<_>>>()?;
-            dev.set_dpi_stages(&razer_proto::mouse::DpiStages { active, stages })?;
+            dev.set_dpi_stages(&hidconfig_proto::mouse::DpiStages { active, stages })?;
             let st = dev.dpi_stages()?;
             println!(
                 "{}: stages now {:?}, active {}",
@@ -176,7 +176,7 @@ fn run(dev: &Device, cmd: &Cmd) -> Result<()> {
     Ok(())
 }
 
-use razer_settings::parse_rgb;
+use hidconfig_settings::parse_rgb;
 
 /// `1600` or `1600x1200`.
 fn parse_xy(s: &str) -> Result<(u16, u16)> {
@@ -185,18 +185,18 @@ fn parse_xy(s: &str) -> Result<(u16, u16)> {
 }
 
 fn show_config() -> Result<()> {
-    let p = razer_settings::path()?;
+    let p = hidconfig_settings::path()?;
     println!("# {}", p.display());
     match std::fs::read_to_string(&p) {
         Ok(s) => print!("{s}"),
-        Err(_) => println!("# (no config yet; run `razerctl save`)"),
+        Err(_) => println!("# (no config yet; run `hidconfigctl save`)"),
     }
     Ok(())
 }
 
 fn save(api: &HidApi) -> Result<()> {
-    let base = razer_settings::Config::load()?;
-    let cfg = razer_settings::snapshot(api, &base)?;
+    let base = hidconfig_settings::Config::load()?;
+    let cfg = hidconfig_settings::snapshot(api, &base)?;
     let p = cfg.save()?;
     println!("saved to {}", p.display());
     print!("{}", toml::to_string_pretty(&cfg)?);
@@ -204,14 +204,14 @@ fn save(api: &HidApi) -> Result<()> {
 }
 
 fn apply(api: &HidApi) -> Result<()> {
-    let cfg = razer_settings::Config::load()?;
-    for dev in razer_hid::open_all(api) {
+    let cfg = hidconfig_settings::Config::load()?;
+    for dev in hidconfig_hid::open_all(api) {
         let dev = dev?;
-        razer_settings::apply_viper(&dev, &cfg.viper).with_context(|| dev.model.name)?;
+        hidconfig_settings::apply_viper(&dev, &cfg.viper).with_context(|| dev.model.name)?;
         println!("{}: applied", dev.model.name);
     }
-    if let Some(e) = razer_hid::earbuds::Earbuds::open(api)? {
-        razer_settings::apply_earbuds(&e, &cfg.earbuds).context("earbuds")?;
+    if let Some(e) = hidconfig_hid::earbuds::Earbuds::open(api)? {
+        hidconfig_settings::apply_earbuds(&e, &cfg.earbuds).context("earbuds")?;
         println!("Hammerhead V3 HyperSpeed: applied");
     }
     Ok(())
@@ -220,9 +220,9 @@ fn apply(api: &HidApi) -> Result<()> {
 fn watch() -> Result<()> {
     println!(
         "watching (config: {}), Ctrl-C to stop",
-        razer_settings::path()?.display()
+        hidconfig_settings::path()?.display()
     );
-    razer_settings::watch(
+    hidconfig_settings::watch(
         |ev| {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -251,7 +251,7 @@ fn descriptor(api: &HidApi, pid: &str) -> Result<()> {
             d.usage_page(),
             d.usage()
         );
-        let mut buf = [0u8; razer_hid::hidapi::MAX_REPORT_DESCRIPTOR_SIZE];
+        let mut buf = [0u8; hidconfig_hid::hidapi::MAX_REPORT_DESCRIPTOR_SIZE];
         match d
             .open_device(api)
             .and_then(|h| h.get_report_descriptor(&mut buf))
@@ -444,8 +444,8 @@ enum EqArg {
 }
 
 fn earbuds(api: &HidApi, cmd: &EarbudsCmd) -> Result<()> {
-    use razer_hid::earbuds::Earbuds;
-    use razer_proto::hyperspeed::{Anc, EqPreset};
+    use hidconfig_hid::earbuds::Earbuds;
+    use hidconfig_proto::hyperspeed::{Anc, EqPreset};
 
     let e = Earbuds::open(api)?.context("Hammerhead V3 HyperSpeed dongle not found")?;
     let onoff = |b: bool| if b { "on" } else { "off" };
@@ -540,7 +540,7 @@ fn list(api: &HidApi) -> Result<()> {
             d.usage_page(),
             d.usage(),
             d.product_string().unwrap_or(""),
-            if razer_hid::model(d.product_id()).is_some() {
+            if hidconfig_hid::model(d.product_id()).is_some() {
                 " [supported]"
             } else {
                 ""

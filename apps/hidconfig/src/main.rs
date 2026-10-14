@@ -10,7 +10,7 @@ mod worker;
 use std::{cell::RefCell, sync::mpsc::Sender};
 
 use anyhow::Result;
-use razer_settings::{Eq, LogoEffect, NoiseControl, StageDpi, parse_rgb};
+use hidconfig_settings::{Eq, LogoEffect, NoiseControl, StageDpi, parse_rgb};
 use slint::ComponentHandle;
 use slint::Model;
 use tray_icon::{
@@ -77,7 +77,7 @@ fn run() -> Result<()> {
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu.menu.clone()))
         .with_menu_on_left_click(false)
-        .with_tooltip("openrazer-win: starting…")
+        .with_tooltip("HIDConfig: starting…")
         .with_icon(icon::icon(icon::State::Idle))
         .build()?;
 
@@ -87,7 +87,7 @@ fn run() -> Result<()> {
 
     let ui = SettingsWindow::new()?;
     ui.global::<AppState>().set_config_path(
-        razer_settings::path()
+        hidconfig_settings::path()
             .map(|p| p.display().to_string())
             .unwrap_or_default()
             .into(),
@@ -134,7 +134,7 @@ fn run() -> Result<()> {
 }
 
 /// Stages become the source of the live DPI: the active stage's value applies.
-pub fn set_stages(c: &mut razer_settings::Config, stages: Vec<StageDpi>, active: u8) {
+pub fn set_stages(c: &mut hidconfig_settings::Config, stages: Vec<StageDpi>, active: u8) {
     c.viper.dpi_stages = Some(stages);
     c.viper.dpi_stage = Some(active);
     c.viper.dpi = None;
@@ -142,7 +142,7 @@ pub fn set_stages(c: &mut razer_settings::Config, stages: Vec<StageDpi>, active:
 }
 
 /// Sends a config edit to the worker.
-fn edit(tx: &Sender<Cmd>, f: impl FnOnce(&mut razer_settings::Config) + Send + 'static) {
+fn edit(tx: &Sender<Cmd>, f: impl FnOnce(&mut hidconfig_settings::Config) + Send + 'static) {
     let _ = tx.send(Cmd::Edit(Box::new(f)));
 }
 
@@ -230,7 +230,7 @@ fn wire_ui(ui: &SettingsWindow, tx: &Sender<Cmd>) {
             return;
         }
         edit(&t, move |c| {
-            c.viper.logo = Some(razer_settings::Logo {
+            c.viper.logo = Some(hidconfig_settings::Logo {
                 effect,
                 color: Some(hex),
             })
@@ -348,7 +348,7 @@ fn tooltip(s: &Snapshot) -> String {
         None => {}
     }
     if parts.is_empty() {
-        "openrazer-win: no devices".into()
+        "HIDConfig: no devices".into()
     } else {
         parts.join(" · ")
     }

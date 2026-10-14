@@ -1,4 +1,4 @@
-; Inno Setup script for openrazer-win. Build with tools\build-release.ps1, which
+; Inno Setup script for HIDConfig. Build with tools\build-release.ps1, which
 ; passes /DAppVersion=<workspace version>.
 ;
 ; System-wide install into Program Files (admin). Autostart is per user (HKCU Run,
@@ -9,12 +9,12 @@
   #error Pass /DAppVersion=x.y.z (tools\build-release.ps1 does this)
 #endif
 
-#define AppName "openrazer-win"
-#define TrayExe "razer-tray.exe"
+#define AppName "HIDConfig"
+#define TrayExe "hidconfig.exe"
 
 [Setup]
 ; Never change AppId: upgrades and uninstall are keyed on it.
-AppId={{4B38C3DC-0C51-4178-9970-59B778562074}
+AppId={{DBEC14B0-6F4D-430F-94AB-BD331EFDF5FC}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
@@ -27,7 +27,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir=..\dist
 OutputBaseFilename={#AppName}-{#AppVersion}-setup
-SetupIconFile=openrazer.ico
+SetupIconFile=hidconfig.ico
+LicenseFile=..\LICENSE
 UninstallDisplayIcon={app}\{#TrayExe}
 UninstallDisplayName={#AppName}
 Compression=lzma2/max
@@ -43,7 +44,7 @@ Name: "autostart"; Description: "Start {#AppName} when I sign in"; GroupDescript
 
 [Files]
 Source: "..\target\release\{#TrayExe}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\target\release\razerctl.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\target\release\hidconfigctl.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docs\*.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 

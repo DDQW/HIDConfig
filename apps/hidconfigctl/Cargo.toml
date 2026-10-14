@@ -1,0 +1,16 @@
+[package]
+name = "hidconfigctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+hidconfig-hid = { version = "0.1.0", path = "../../crates/hidconfig-hid" }
+hidconfig-proto = { version = "0.1.0", path = "../../crates/hidconfig-proto" }
+hidconfig-settings = { version = "0.1.0", path = "../../crates/hidconfig-settings" }
+toml = "1.1.8"
+
+[build-dependencies]
+winresource = "0.1.34"

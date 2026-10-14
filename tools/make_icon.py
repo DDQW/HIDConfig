@@ -1,6 +1,6 @@
-"""Writes packaging/openrazer.ico and packaging/openrazer.png (stdlib only).
+"""Writes packaging/hidconfig.ico and packaging/hidconfig.png (stdlib only).
 
-Same design as the runtime tray icon (apps/razer-tray/src/icon.rs): a green ring
+Same design as the runtime tray icon (apps/hidconfig/src/icon.rs): a green ring
 with a centre dot, anti-aliased, on a transparent background.
 
 Usage: python -I tools/make_icon.py <repo root>
@@ -74,11 +74,11 @@ def ico(images):
 def main():
     root = sys.argv[1]
     images = [(s, png(s, render(s))) for s in SIZES]
-    with open(f"{root}/packaging/openrazer.ico", "wb") as f:
+    with open(f"{root}/packaging/hidconfig.ico", "wb") as f:
         f.write(ico(images))
-    with open(f"{root}/packaging/openrazer.png", "wb") as f:
+    with open(f"{root}/packaging/hidconfig.png", "wb") as f:
         f.write(dict(images)[256])
-    print("wrote packaging/openrazer.ico and packaging/openrazer.png")
+    print("wrote packaging/hidconfig.ico and packaging/hidconfig.png")
 
 
 if __name__ == "__main__":

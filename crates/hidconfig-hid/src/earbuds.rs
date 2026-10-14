@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use hidapi::{HidApi, HidDevice};
-use razer_proto::hyperspeed::{
+use hidconfig_proto::hyperspeed::{
     self, Anc, EqPreset, FRAME_LEN, Frame, Message, SEQ_RANGE, STATUS_OK, STATUS_PUSH, req,
 };
 

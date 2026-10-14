@@ -1,4 +1,4 @@
-//! Saved device settings (`%APPDATA%\openrazer-win\config.toml`) and the loop that
+//! Saved device settings (`%APPDATA%\HIDConfig\config.toml`) and the loop that
 //! re-applies them when a device appears, the PC resumes, or the file changes.
 
 use std::{
@@ -8,12 +8,12 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use razer_hid::{
+use hidconfig_hid::{
     Device,
     earbuds::{Battery, Earbuds},
     hidapi::HidApi,
 };
-use razer_proto::{
+use hidconfig_proto::{
     extended::Effect,
     hyperspeed::{Anc, EqPreset},
     mouse::DpiStages,
@@ -178,17 +178,30 @@ impl Logo {
     }
 }
 
+/// The project was called openrazer-win before 0.1.0; carry its config over once.
+fn migrate_legacy(new: &std::path::Path) {
+    let Some(appdata) = std::env::var_os("APPDATA") else {
+        return;
+    };
+    let old = PathBuf::from(appdata)
+        .join("openrazer-win")
+        .join("config.toml");
+    if !new.exists() && old.exists() {
+        let _ = std::fs::create_dir_all(new.parent().unwrap());
+        let _ = std::fs::copy(&old, new);
+    }
+}
+
 pub fn path() -> Result<PathBuf> {
     let appdata = std::env::var_os("APPDATA").context("APPDATA is not set")?;
-    Ok(PathBuf::from(appdata)
-        .join("openrazer-win")
-        .join("config.toml"))
+    Ok(PathBuf::from(appdata).join("HIDConfig").join("config.toml"))
 }
 
 impl Config {
     /// Missing file = empty config.
     pub fn load() -> Result<Self> {
         let p = path()?;
+        migrate_legacy(&p);
         match std::fs::read_to_string(&p) {
             Ok(s) => toml::from_str(&s).with_context(|| format!("parsing {}", p.display())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
@@ -297,7 +310,7 @@ fn finish(errors: Vec<String>) -> Result<()> {
 /// gestures and prompts have no getter and are kept from `base`.
 pub fn snapshot(api: &HidApi, base: &Config) -> Result<Config> {
     let mut cfg = base.clone();
-    for dev in razer_hid::open_all(api).into_iter().flatten() {
+    for dev in hidconfig_hid::open_all(api).into_iter().flatten() {
         let (x, y) = dev.dpi()?;
         cfg.viper.dpi = Some(x);
         cfg.viper.dpi_y = (y != x).then_some(y);
@@ -478,7 +491,7 @@ impl Watcher {
         if self.config.viper == Viper::default() {
             return;
         }
-        for d in razer_hid::open_all(&self.api).into_iter().flatten() {
+        for d in hidconfig_hid::open_all(&self.api).into_iter().flatten() {
             on_event(match apply_viper(&d, &self.config.viper) {
                 Ok(()) => Event::Applied(Target::Viper),
                 Err(e) => Event::Failed(Target::Viper, format!("{e:#}")),
@@ -555,7 +568,7 @@ impl Watcher {
         if let Some(t) = trigger {
             on_event(Event::Reapplying(t));
         }
-        let viper_now = razer_hid::open_all(&self.api).iter().any(|d| d.is_ok());
+        let viper_now = hidconfig_hid::open_all(&self.api).iter().any(|d| d.is_ok());
         let dongle_now = matches!(Earbuds::open(&self.api), Ok(Some(_)));
 
         if viper_now && (!self.viper_present || trigger.is_some()) {
@@ -585,7 +598,7 @@ impl Watcher {
     }
 
     fn refresh_status(&mut self) {
-        let viper = razer_hid::open_all(&self.api)
+        let viper = hidconfig_hid::open_all(&self.api)
             .into_iter()
             .flatten()
             .next()

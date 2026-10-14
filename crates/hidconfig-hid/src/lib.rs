@@ -4,7 +4,7 @@ use std::{thread, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use hidapi::{DeviceInfo, HidApi, HidDevice};
-use razer_proto::{REPORT_LEN, Report, Status, extended::Effect, led, mouse, standard};
+use hidconfig_proto::{REPORT_LEN, Report, Status, extended::Effect, led, mouse, standard};
 
 pub use hidapi;
 
@@ -174,7 +174,7 @@ impl Device {
     }
 
     pub fn set_logo_effect(&self, effect: Effect) -> Result<()> {
-        self.transact(&razer_proto::extended::set_effect(
+        self.transact(&hidconfig_proto::extended::set_effect(
             self.txn(),
             led::LOGO,
             effect,
@@ -206,15 +206,15 @@ impl Device {
     }
 
     pub fn logo_brightness(&self) -> Result<u8> {
-        let r = self.transact(&razer_proto::extended::get_brightness(
+        let r = self.transact(&hidconfig_proto::extended::get_brightness(
             self.txn(),
             led::LOGO,
         ))?;
-        Ok(razer_proto::extended::parse_brightness(&r))
+        Ok(hidconfig_proto::extended::parse_brightness(&r))
     }
 
     pub fn set_logo_brightness(&self, b: u8) -> Result<()> {
-        self.transact(&razer_proto::extended::set_brightness(
+        self.transact(&hidconfig_proto::extended::set_brightness(
             self.txn(),
             led::LOGO,
             b,

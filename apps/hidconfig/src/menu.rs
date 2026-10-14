@@ -1,7 +1,7 @@
 //! Tray context menu: built once, then re-checked from each snapshot.
 
 use anyhow::Result;
-use razer_settings::{Config, EarbudsCfg, Eq, Logo, LogoEffect, NoiseControl, StageDpi};
+use hidconfig_settings::{Config, EarbudsCfg, Eq, Logo, LogoEffect, NoiseControl, StageDpi};
 use tray_icon::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
 use crate::worker::Snapshot;
@@ -161,7 +161,7 @@ impl TrayMenu {
             .iter()
             .map(|&d| (d, check(format!("dpi:{d}"), &d.to_string())))
             .collect();
-        let stages: Vec<_> = (1..=razer_proto::mouse::MAX_DPI_STAGES)
+        let stages: Vec<_> = (1..=hidconfig_proto::mouse::MAX_DPI_STAGES)
             .map(|n| check(format!("stage:{n}"), &format!("Stage {n}")))
             .collect();
         let poll: Vec<_> = POLL_RATES
@@ -402,7 +402,7 @@ impl TrayMenu {
     pub fn action(
         &self,
         id: &str,
-        stages: Option<razer_proto::mouse::DpiStages>,
+        stages: Option<hidconfig_proto::mouse::DpiStages>,
     ) -> Option<Action> {
         let (kind, arg) = id.split_once(':').unwrap_or((id, ""));
         let edit = |f: Box<dyn FnOnce(&mut Config) + Send>| Some(Action::Edit(f));
@@ -505,7 +505,7 @@ pub fn set_power(e: &mut EarbudsCfg, minutes: u16) {
     }
 }
 
-pub fn battery_text(e: &razer_settings::EarbudsStatus) -> String {
+pub fn battery_text(e: &hidconfig_settings::EarbudsStatus) -> String {
     let pct = |p: Option<u8>| p.map_or("–".into(), |p| format!("{p}%"));
     match e.battery {
         Some(b) => format!("L {} · R {}", pct(b.left), pct(b.right)),

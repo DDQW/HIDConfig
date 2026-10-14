@@ -5,8 +5,9 @@ members = ["apps/*", "crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-description = "Synapse-free control for Razer devices on Windows"
-repository = ""
+description = "Configure Razer mice and earbuds on Windows without Synapse"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/DDQW/HIDConfig"
 
 [profile.release]
 lto = "thin"

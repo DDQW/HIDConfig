@@ -5,7 +5,7 @@ use std::{io::Write, path::PathBuf};
 use anyhow::Result;
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-const RUN_VALUE: &str = "openrazer-win";
+const RUN_VALUE: &str = "HIDConfig";
 
 /// Holds the named mutex for the life of the process. `None` if another tray is running.
 pub struct SingleInstance(#[allow(dead_code)] windows::Win32::Foundation::HANDLE);
@@ -19,7 +19,7 @@ pub fn single_instance() -> Option<SingleInstance> {
         core::w,
     };
     // SAFETY: plain Win32 call with a static name; the handle is kept until exit.
-    let handle = unsafe { CreateMutexW(None, true, w!("Local\\openrazer-win-tray")) }.ok()?;
+    let handle = unsafe { CreateMutexW(None, true, w!("Local\\HIDConfig-tray")) }.ok()?;
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
         return None;
     }
@@ -48,7 +48,7 @@ pub fn set_autostart(on: bool) -> Result<()> {
 }
 
 fn log_path() -> Option<PathBuf> {
-    Some(razer_settings::path().ok()?.with_file_name("tray.log"))
+    Some(hidconfig_settings::path().ok()?.with_file_name("tray.log"))
 }
 
 /// Starts a fresh log if the old one passed 1 MB.
@@ -78,9 +78,9 @@ pub fn log(msg: &str) {
 
 /// Opens the config in Notepad, creating an empty one first if needed.
 pub fn open_config() -> Result<()> {
-    let p = razer_settings::path()?;
+    let p = hidconfig_settings::path()?;
     if !p.exists() {
-        razer_settings::Config::default().save()?;
+        hidconfig_settings::Config::default().save()?;
     }
     std::process::Command::new("notepad.exe").arg(p).spawn()?;
     Ok(())

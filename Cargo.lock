@@ -2055,6 +2055,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "hidconfig"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hidconfig-hid",
+ "hidconfig-proto",
+ "hidconfig-settings",
+ "slint",
+ "slint-build",
+ "tray-icon",
+ "windows",
+ "windows-registry",
+ "winresource",
+]
+
+[[package]]
+name = "hidconfig-hid"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hidapi",
+ "hidconfig-proto",
+]
+
+[[package]]
+name = "hidconfig-proto"
+version = "0.1.0"
+
+[[package]]
+name = "hidconfig-settings"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hidconfig-hid",
+ "hidconfig-proto",
+ "serde",
+ "toml 1.1.8+spec-1.1.0",
+]
+
+[[package]]
+name = "hidconfigctl"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hidconfig-hid",
+ "hidconfig-proto",
+ "hidconfig-settings",
+ "toml 1.1.8+spec-1.1.0",
+ "winresource",
+]
+
+[[package]]
 name = "htmlparser"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4104,59 +4157,6 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
-]
-
-[[package]]
-name = "razer-hid"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "hidapi",
- "razer-proto",
-]
-
-[[package]]
-name = "razer-proto"
-version = "0.1.0"
-
-[[package]]
-name = "razer-settings"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "razer-hid",
- "razer-proto",
- "serde",
- "toml 1.1.8+spec-1.1.0",
-]
-
-[[package]]
-name = "razer-tray"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "razer-hid",
- "razer-proto",
- "razer-settings",
- "slint",
- "slint-build",
- "tray-icon",
- "windows",
- "windows-registry",
- "winresource",
-]
-
-[[package]]
-name = "razerctl"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "razer-hid",
- "razer-proto",
- "razer-settings",
- "toml 1.1.8+spec-1.1.0",
- "winresource",
 ]
 
 [[package]]

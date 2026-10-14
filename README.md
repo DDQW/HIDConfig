@@ -1,4 +1,4 @@
-# openrazer-win
+# HIDConfig
 
 Control Razer devices on Windows without Synapse, in the spirit of
 [OpenRazer](https://github.com/openrazer/openrazer) on Linux.
@@ -6,7 +6,7 @@ Control Razer devices on Windows without Synapse, in the spirit of
 - **No kernel driver.** Everything talks to the devices over HID from user mode.
 - **Small tray app.** A tray icon and menu for quick changes, plus a settings window.
 - **Settings stick.** They are saved to a TOML file and re-applied when a device is plugged in, the PC wakes from sleep, or you edit the file.
-- **`razerctl` CLI** for scripting and debugging.
+- **`hidconfigctl` CLI** for scripting and debugging.
 
 Not affiliated with Razer.
 
@@ -22,18 +22,18 @@ usually be added with a device-table entry; see [Adding a device](#adding-a-devi
 
 ## Install
 
-1. Run `openrazer-win-<version>-setup.exe`. It installs into `C:\Program Files\openrazer-win` and asks for admin rights once.
-2. Leave **Start openrazer-win when I sign in** ticked if you want it to start at login. You can change this later in the app.
+1. Run `HIDConfig-<version>-setup.exe`. It installs into `C:\Program Files\HIDConfig` and asks for admin rights once.
+2. Leave **Start HIDConfig when I sign in** ticked if you want it to start at login. You can change this later in the app.
 3. Find the green ring icon in the tray. If it isn't visible, check the hidden icons (^).
 
 Uninstalling (Settings → Apps) stops the tray and removes autostart. Your settings in
-`%APPDATA%\openrazer-win\` are kept.
+`%APPDATA%\HIDConfig\` are kept.
 
 ### Synapse
 
-openrazer-win works with Synapse installed, but Synapse's services can fight it:
+HIDConfig works with Synapse installed, but Synapse's services can fight it:
 - Its Chroma service overwrites the logo lighting.
-- Its services share the device's reply slot (openrazer-win retries when that happens).
+- Its services share the device's reply slot (HIDConfig retries when that happens).
 
 Stop Synapse without uninstalling it, then bring it back whenever you need it:
 
@@ -54,7 +54,7 @@ earbud is at 20 % or below, and grey when no device is connected.
 
 **Settings window** (left-click the icon): every setting, including the DPI stage editor and custom logo colours.
 
-**Config file:** `%APPDATA%\openrazer-win\config.toml`. Every key is optional; anything missing is left alone on the device.
+**Config file:** `%APPDATA%\HIDConfig\config.toml`. Every key is optional; anything missing is left alone on the device.
 
 ```toml
 [viper]
@@ -81,35 +81,35 @@ gestures = true
 audio_prompts = true
 ```
 
-**CLI** (`razerctl.exe`, next to the tray exe):
+**CLI** (`hidconfigctl.exe`, next to the tray exe):
 
 ```
-razerctl info                     # firmware, DPI, stages, polling, brightness
-razerctl dpi 1600 [1200]          # live DPI (X [Y])
-razerctl stages 400 800 1600x1200 --active 2
-razerctl poll 1000
-razerctl logo static ff0000 | breathing 00c8ff | spectrum | off
-razerctl brightness 200
-razerctl earbuds info             # battery, connection, ANC, mic, DND, power saving
-razerctl earbuds anc off|anc|ambient
-razerctl earbuds eq game|music|movie|flat
-razerctl earbuds mic on|off       # also: dnd, power-saving, timeout <min>, auto-pause, gestures, prompts
-razerctl save                     # write what the devices report into config.toml
-razerctl apply                    # apply config.toml once
-razerctl watch                    # what the tray does, in a console
-razerctl list | descriptor <pid> | listen <pid> [--guided]   # reverse-engineering helpers
+hidconfigctl info                     # firmware, DPI, stages, polling, brightness
+hidconfigctl dpi 1600 [1200]          # live DPI (X [Y])
+hidconfigctl stages 400 800 1600x1200 --active 2
+hidconfigctl poll 1000
+hidconfigctl logo static ff0000 | breathing 00c8ff | spectrum | off
+hidconfigctl brightness 200
+hidconfigctl earbuds info             # battery, connection, ANC, mic, DND, power saving
+hidconfigctl earbuds anc off|anc|ambient
+hidconfigctl earbuds eq game|music|movie|flat
+hidconfigctl earbuds mic on|off       # also: dnd, power-saving, timeout <min>, auto-pause, gestures, prompts
+hidconfigctl save                     # write what the devices report into config.toml
+hidconfigctl apply                    # apply config.toml once
+hidconfigctl watch                    # what the tray does, in a console
+hidconfigctl list | descriptor <pid> | listen <pid> [--guided]   # reverse-engineering helpers
 ```
 
-Logs: `%APPDATA%\openrazer-win\tray.log`.
+Logs: `%APPDATA%\HIDConfig\tray.log`.
 
 ## How it works
 
 ```
-apps/razer-tray      tray icon, menu, Slint settings window; UI thread + device thread
-apps/razerctl        CLI
-crates/razer-settings  config.toml, apply, Watcher (arrival / resume / config edits, live status)
-crates/razer-hid     Windows HID transport (hidapi): device table, Viper + earbuds commands
-crates/razer-proto   pure protocol: OpenRazer 90-byte reports, HyperSpeed mailbox frames
+apps/hidconfig      tray icon, menu, Slint settings window; UI thread + device thread
+apps/hidconfigctl        CLI
+crates/hidconfig-settings  config.toml, apply, Watcher (arrival / resume / config edits, live status)
+crates/hidconfig-hid     Windows HID transport (hidapi): device table, Viper + earbuds commands
+crates/hidconfig-proto   pure protocol: OpenRazer 90-byte reports, HyperSpeed mailbox frames
 ```
 
 - **Viper:** OpenRazer's 90-byte feature report on interface 0, with transaction id `0x1f`.
@@ -123,23 +123,23 @@ Requirements:
 
 ```powershell
 cargo test --workspace
-cargo build --release                                            # target\release\razer-tray.exe, razerctl.exe
-powershell -ExecutionPolicy Bypass -File tools\build-release.ps1 # dist\openrazer-win-<ver>-setup.exe
+cargo build --release                                            # target\release\hidconfig.exe, hidconfigctl.exe
+powershell -ExecutionPolicy Bypass -File tools\build-release.ps1 # dist\HIDConfig-<ver>-setup.exe
 ```
 
-`tools\make_icon.py` regenerates `packaging\openrazer.ico` and `.png`.
+`tools\make_icon.py` regenerates `packaging\hidconfig.ico` and `.png`.
 
 ## Adding a device
 
 **Mice that use OpenRazer's protocol:**
-1. Run `razerctl list` and note the product id and the interface whose usage page is `0001`, usage `0002` (usually interface 0).
+1. Run `hidconfigctl list` and note the product id and the interface whose usage page is `0001`, usage `0002` (usually interface 0).
 2. Look the device up in OpenRazer's `driver/razermouse_driver.c` for its transaction id (`0x1f` or `0x3f` for most recent mice) and its max DPI.
-3. Add a `Model` entry to `MODELS` in `crates/razer-hid/src/lib.rs` with the supported `Feature`s.
-4. Check with `razerctl info` (read-only first), then try the setters.
+3. Add a `Model` entry to `MODELS` in `crates/hidconfig-hid/src/lib.rs` with the supported `Feature`s.
+4. Check with `hidconfigctl info` (read-only first), then try the setters.
 
 **Devices with an unknown protocol** (headsets, dongles): reverse-engineer it the way the Hammerhead was done.
-1. Run `razerctl descriptor <pid>` to see the report layout.
-2. Run `razerctl listen <pid>` to watch unsolicited events.
+1. Run `hidconfigctl descriptor <pid>` to see the report layout.
+2. Run `hidconfigctl listen <pid>` to watch unsolicited events.
 3. Record Synapse's traffic with USBPcap while marking each UI action with `tools\mark.ps1`.
 4. Turn the recording into a timeline with `tools\decode_capture.py <pcap> <markers>`.
 5. Write the protocol up in `docs/` before writing code, and add unit tests that re-encode captured frames byte for byte.
@@ -148,3 +148,8 @@ powershell -ExecutionPolicy Bypass -File tools\build-release.ps1 # dist\openraze
 
 The mouse protocol knowledge comes from OpenRazer (`razercommon.h`,
 `razerchromacommon.c`, `razermouse_driver.c`).
+
+## License
+
+GPL-3.0-or-later; see [LICENSE](LICENSE). Copyright (C) 2026 Dominik Wölki.
+

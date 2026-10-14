@@ -1,7 +1,7 @@
 # Razer Hammerhead V3 HyperSpeed (dongle PID 0x0A61): protocol notes
 
 Sources:
-- Passive captures (`razerctl listen 0a61 [--guided]`) with Synapse uninstalled.
+- Passive captures (`hidconfigctl listen 0a61 [--guided]`) with Synapse uninstalled.
 - A USBPcap recording of Synapse changing every setting, timestamped against UI markers (`tools/mark.ps1`) and decoded with `tools/decode_capture.py`.
 
 "Confirmed" means seen in the Synapse capture; "guess" means a hypothesis that still needs testing.
@@ -87,7 +87,7 @@ That might be 10 bands, or fewer bands plus trailing settings, since the last th
 - `05 38 01 mask`: connection mask.
 - `05 11 01`: unknown.
 
-## Hardware verification (2026-10-14, `razerctl earbuds`)
+## Hardware verification (2026-10-14, `hidconfigctl earbuds`)
 
 - Every get reads correctly: battery, connection, ANC, mic, DND, power saving, timeout.
 - These sets were each changed, read back, and restored: ANC (ambient, off, ANC), DND, mic, timeout 15/5 min, power saving.

@@ -6,7 +6,7 @@ use std::{
     time::Instant,
 };
 
-use razer_settings::{Config, Event, Status, TICK, Watcher};
+use hidconfig_settings::{Config, Event, Status, TICK, Watcher};
 
 use crate::platform::log;
 
@@ -74,9 +74,9 @@ fn run(rx: Receiver<Cmd>, publish: impl Fn(Snapshot)) {
                 }
             }
             Ok(Cmd::MicOn(on)) => match watcher.set_mic_muted(!on) {
-                Ok(()) => on_event(Event::Applied(razer_settings::Target::Earbuds)),
+                Ok(()) => on_event(Event::Applied(hidconfig_settings::Target::Earbuds)),
                 Err(e) => on_event(Event::Failed(
-                    razer_settings::Target::Earbuds,
+                    hidconfig_settings::Target::Earbuds,
                     format!("mic: {e:#}"),
                 )),
             },

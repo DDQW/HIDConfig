@@ -5,7 +5,7 @@ $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 
 $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
-Write-Host "openrazer-win $version"
+Write-Host "HIDConfig $version"
 
 cargo test --workspace --quiet
 if ($LASTEXITCODE -ne 0) { throw 'tests failed' }
@@ -19,10 +19,10 @@ $iscc = @(
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) { throw 'Inno Setup 6 not found (winget install JRSoftware.InnoSetup)' }
 
-& $iscc /Q "/DAppVersion=$version" packaging\openrazer-win.iss
+& $iscc /Q "/DAppVersion=$version" packaging\hidconfig.iss
 if ($LASTEXITCODE -ne 0) { throw 'installer build failed' }
 
-$out = Join-Path $root "dist\openrazer-win-$version-setup.exe"
+$out = Join-Path $root "dist\HIDConfig-$version-setup.exe"
 $hash = (Get-FileHash $out -Algorithm SHA256).Hash
 "$hash  $(Split-Path $out -Leaf)" | Set-Content "$out.sha256"
 Write-Host "built $out"
