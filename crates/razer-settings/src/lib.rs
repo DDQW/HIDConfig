@@ -267,8 +267,10 @@ pub enum Target {
 pub enum Event {
     Applied(Target),
     Failed(Target, String),
-    /// The earbuds didn't answer (usually: in the case); will retry.
+    /// No earbud is connected to the dongle (usually: in the case); will check again.
     EarbudsWaiting,
+    /// Applying failed; another attempt follows.
+    Retrying(Target, String),
     ConfigError(String),
     Reapplying(Trigger),
 }
@@ -283,15 +285,21 @@ pub enum Trigger {
 const TICK: Duration = Duration::from_secs(2);
 /// A tick that took this long means the machine slept.
 const RESUME_GAP: Duration = Duration::from_secs(15);
-const EARBUDS_RETRY: Duration = Duration::from_secs(20);
+/// Let the wireless link come up after a plug-in or wake-up before talking to the buds.
+const EARBUDS_SETTLE: Duration = Duration::from_secs(5);
+/// While no bud is connected.
+const EARBUDS_POLL: Duration = Duration::from_secs(20);
+const EARBUDS_RETRY: Duration = Duration::from_secs(10);
+const EARBUDS_ATTEMPTS: u32 = 6;
 
 /// Runs forever (until `keep_going` returns false), calling `on_event` for each action.
 pub fn watch(mut on_event: impl FnMut(Event), mut keep_going: impl FnMut() -> bool) -> Result<()> {
     let mut api = HidApi::new()?;
     let mut viper_present = false;
     let mut dongle_present = false;
-    let mut earbuds_pending = false;
-    let mut last_earbuds_try = Instant::now() - EARBUDS_RETRY;
+    // When the next earbuds attempt is due, and how many have failed so far.
+    let mut earbuds_due: Option<Instant> = None;
+    let mut earbuds_failures = 0;
     let mut config_mtime = mtime();
     let mut config = match Config::load() {
         Ok(c) => c,
@@ -345,26 +353,37 @@ pub fn watch(mut on_event: impl FnMut(Event), mut keep_going: impl FnMut() -> bo
         }
 
         if dongle_now && (!dongle_present || trigger.is_some()) {
-            earbuds_pending = true;
-            last_earbuds_try = Instant::now() - EARBUDS_RETRY;
+            earbuds_due = Some(Instant::now() + EARBUDS_SETTLE);
+            earbuds_failures = 0;
         }
         if !dongle_now || config.earbuds == EarbudsCfg::default() {
-            earbuds_pending = false;
+            earbuds_due = None;
         }
-        if let Some(e) = &earbuds
-            && earbuds_pending
-            && last_earbuds_try.elapsed() >= EARBUDS_RETRY
+        if let (Some(e), Some(due)) = (&earbuds, earbuds_due)
+            && Instant::now() >= due
         {
-            last_earbuds_try = Instant::now();
             // Cheap probe first so buds in the case cost one timeout, not one per setting.
-            if e.connection().is_err() {
+            let connected = e.connection().is_ok_and(|d| d.iter().any(|&b| b != 0));
+            if !connected {
                 on_event(Event::EarbudsWaiting);
+                earbuds_due = Some(Instant::now() + EARBUDS_POLL);
             } else {
-                earbuds_pending = false;
-                on_event(match apply_earbuds(e, &config.earbuds) {
-                    Ok(()) => Event::Applied(Target::Earbuds),
-                    Err(err) => Event::Failed(Target::Earbuds, format!("{err:#}")),
-                });
+                match apply_earbuds(e, &config.earbuds) {
+                    Ok(()) => {
+                        on_event(Event::Applied(Target::Earbuds));
+                        earbuds_due = None;
+                    }
+                    Err(err) => {
+                        earbuds_failures += 1;
+                        if earbuds_failures < EARBUDS_ATTEMPTS {
+                            on_event(Event::Retrying(Target::Earbuds, format!("{err:#}")));
+                            earbuds_due = Some(Instant::now() + EARBUDS_RETRY);
+                        } else {
+                            on_event(Event::Failed(Target::Earbuds, format!("{err:#}")));
+                            earbuds_due = None;
+                        }
+                    }
+                }
             }
         }
 
