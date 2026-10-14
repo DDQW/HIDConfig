@@ -40,6 +40,11 @@ enum Cmd {
     Apply,
     /// Keep running: re-apply the config on device arrival, resume, or config edits.
     Watch,
+    /// Windows audio devices and app volumes.
+    Audio {
+        #[command(subcommand)]
+        cmd: AudioCmd,
+    },
     /// Windows mouse and keyboard settings.
     Win {
         #[command(subcommand)]
@@ -89,6 +94,7 @@ fn main() -> Result<()> {
         Cmd::Apply => return apply(&api),
         Cmd::Watch => return watch(),
         Cmd::Win { cmd } => return win(cmd),
+        Cmd::Audio { cmd } => return audio(cmd),
         _ => {}
     }
     let devices: Vec<Device> = hidconfig_hid::open_all(&api)
@@ -113,7 +119,8 @@ fn run(dev: &Device, cmd: &Cmd) -> Result<()> {
         | Cmd::Save
         | Cmd::Apply
         | Cmd::Watch
-        | Cmd::Win { .. } => unreachable!(),
+        | Cmd::Win { .. }
+        | Cmd::Audio { .. } => unreachable!(),
         Cmd::Info => {
             let (maj, min) = dev.firmware()?;
             let (x, y) = dev.dpi()?;
@@ -287,6 +294,104 @@ fn win(cmd: &WinCmd) -> Result<()> {
                 println!("default curve written; sign out and back in to use it");
             }
             println!("acceleration curve is default: {}", hidconfig_win::mouse::curve_is_default());
+        }
+    }
+    Ok(())
+}
+
+#[derive(Subcommand)]
+enum AudioCmd {
+    /// Active devices with volume, mute and default flags.
+    List,
+    /// Set a device's volume in percent. DEVICE: id, name, or part of the name.
+    Volume { device: String, percent: f32 },
+    /// Mute or unmute a device.
+    Mute { device: String, state: OnOff },
+    /// Make a device the default (games/media), or with --comms the default for calls.
+    Default {
+        device: String,
+        #[arg(long)]
+        comms: bool,
+    },
+    /// Apps currently playing audio.
+    Apps,
+    /// Spatial sound state of every output.
+    Spatial,
+    /// Set an app's volume (percent) and/or mute by process id.
+    App {
+        pid: u32,
+        #[arg(long)]
+        volume: Option<f32>,
+        #[arg(long)]
+        mute: Option<OnOff>,
+    },
+}
+
+fn audio(cmd: &AudioCmd) -> Result<()> {
+    use hidconfig_win::audio::{self, Flow, Role};
+    match cmd {
+        AudioCmd::List => {
+            for e in audio::endpoints()? {
+                let tags = [(e.is_default, "default"), (e.is_default_comms, "calls")]
+                    .iter()
+                    .filter(|(on, _)| *on)
+                    .map(|(_, t)| *t)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                println!(
+                    "{:6} {:3.0}%{} {:<48} [{}]\n       {}",
+                    if e.flow == Flow::Output { "out" } else { "in" },
+                    e.volume * 100.0,
+                    if e.muted { " muted" } else { "      " },
+                    e.name,
+                    tags,
+                    e.id
+                );
+            }
+        }
+        AudioCmd::Volume { device, percent } => {
+            let e = audio::find(None, device)?;
+            audio::set_volume(&e.id, percent / 100.0)?;
+            let now = audio::find(None, &e.id)?;
+            println!("{}: {:.0}%", now.name, now.volume * 100.0);
+        }
+        AudioCmd::Mute { device, state } => {
+            let e = audio::find(None, device)?;
+            audio::set_mute(&e.id, state.on())?;
+            println!("{}: muted = {}", e.name, audio::find(None, &e.id)?.muted);
+        }
+        AudioCmd::Default { device, comms } => {
+            let e = audio::find(None, device)?;
+            audio::set_default(&e.id, if *comms { Role::Communications } else { Role::Default })?;
+            let now = audio::find(None, &e.id)?;
+            println!("{}: default = {}, calls = {}", now.name, now.is_default, now.is_default_comms);
+        }
+        AudioCmd::Spatial => {
+            for e in audio::endpoints()?.into_iter().filter(|e| e.flow == Flow::Output) {
+                match audio::spatial(&e.id) {
+                    Ok(s) => println!(
+                        "{}
+    supported: {}  selected: {}  active: {}
+    available: {}",
+                        e.name,
+                        s.supported,
+                        s.selected.as_deref().unwrap_or("off"),
+                        s.active.as_deref().unwrap_or("off"),
+                        s.available.join(", ")
+                    ),
+                    Err(err) => println!("{}
+    {err:#}", e.name),
+                }
+            }
+        }
+        AudioCmd::Apps => {
+            for s in audio::sessions()? {
+                println!("{:>6}  {:3.0}%{}  {}", s.pid, s.volume * 100.0, if s.muted { " muted" } else { "" }, s.app);
+            }
+        }
+        AudioCmd::App { pid, volume, mute } => {
+            let n = audio::set_session(*pid, volume.map(|v| v / 100.0), mute.map(|m| m.on()))?;
+            println!("updated {n} session(s)");
         }
     }
     Ok(())

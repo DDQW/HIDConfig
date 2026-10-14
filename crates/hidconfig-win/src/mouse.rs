@@ -83,7 +83,9 @@ pub const SPEED_MULTIPLIERS: [f32; 20] = [
 ];
 
 pub fn speed_multiplier(speed: u8) -> Option<f32> {
-    SPEED_MULTIPLIERS.get((speed as usize).checked_sub(1)?).copied()
+    SPEED_MULTIPLIERS
+        .get((speed as usize).checked_sub(1)?)
+        .copied()
 }
 
 /// WHEEL_PAGESCROLL (UINT_MAX): scroll one screen per notch.
@@ -116,7 +118,10 @@ fn metric(m: SYSTEM_METRICS_INDEX) -> u32 {
 fn mousekeys() -> Result<MOUSEKEYS> {
     spi::get_struct(
         SPI_GETMOUSEKEYS,
-        MOUSEKEYS { cbSize: size_of::<MOUSEKEYS>() as u32, ..Default::default() },
+        MOUSEKEYS {
+            cbSize: size_of::<MOUSEKEYS>() as u32,
+            ..Default::default()
+        },
     )
 }
 
@@ -176,7 +181,13 @@ pub fn apply(s: &MouseSettings) -> Result<()> {
         run("enhance precision", spi::set_ptr(SPI_SETMOUSE, v));
     }
     if let Some(v) = s.scroll_lines {
-        run("scroll lines", spi::set_ui(SPI_SETWHEELSCROLLLINES, if v == 0 { WHEEL_PAGESCROLL } else { v }));
+        run(
+            "scroll lines",
+            spi::set_ui(
+                SPI_SETWHEELSCROLLLINES,
+                if v == 0 { WHEEL_PAGESCROLL } else { v },
+            ),
+        );
     }
     if let Some(v) = s.scroll_chars {
         run("scroll chars", spi::set_ui(SPI_SETWHEELSCROLLCHARS, v));
@@ -192,31 +203,55 @@ pub fn apply(s: &MouseSettings) -> Result<()> {
         run("double-click time", spi::set_ui(SPI_SETDOUBLECLICKTIME, v));
     }
     if let Some(on) = s.swap_buttons {
-        run("swap buttons", spi::set_ui(SPI_SETMOUSEBUTTONSWAP, on as u32));
+        run(
+            "swap buttons",
+            spi::set_ui(SPI_SETMOUSEBUTTONSWAP, on as u32),
+        );
     }
     if let Some(v) = s.double_click_area {
-        run("double-click area", spi::set_ui(SPI_SETDOUBLECLKWIDTH, v).and(spi::set_ui(SPI_SETDOUBLECLKHEIGHT, v)));
+        run(
+            "double-click area",
+            spi::set_ui(SPI_SETDOUBLECLKWIDTH, v).and(spi::set_ui(SPI_SETDOUBLECLKHEIGHT, v)),
+        );
     }
     if let Some(v) = s.drag_threshold {
-        run("drag threshold", spi::set_ui(SPI_SETDRAGWIDTH, v).and(spi::set_ui(SPI_SETDRAGHEIGHT, v)));
+        run(
+            "drag threshold",
+            spi::set_ui(SPI_SETDRAGWIDTH, v).and(spi::set_ui(SPI_SETDRAGHEIGHT, v)),
+        );
     }
     if let Some(v) = s.hover_ms {
         run("hover time", spi::set_ui(SPI_SETMOUSEHOVERTIME, v));
     }
     if let Some(on) = s.focus_follows_mouse {
-        run("focus follows mouse", spi::set_pv(SPI_SETACTIVEWINDOWTRACKING, on as usize));
+        run(
+            "focus follows mouse",
+            spi::set_pv(SPI_SETACTIVEWINDOWTRACKING, on as usize),
+        );
     }
     if let Some(on) = s.focus_raise {
-        run("focus raise", spi::set_pv(SPI_SETACTIVEWNDTRKZORDER, on as usize));
+        run(
+            "focus raise",
+            spi::set_pv(SPI_SETACTIVEWNDTRKZORDER, on as usize),
+        );
     }
     if let Some(v) = s.focus_delay_ms {
-        run("focus delay", spi::set_pv(SPI_SETACTIVEWNDTRKTIMEOUT, v as usize));
+        run(
+            "focus delay",
+            spi::set_pv(SPI_SETACTIVEWNDTRKTIMEOUT, v as usize),
+        );
     }
     if let Some(on) = s.hide_while_typing {
-        run("hide while typing", spi::set_pv(SPI_SETMOUSEVANISH, on as usize));
+        run(
+            "hide while typing",
+            spi::set_pv(SPI_SETMOUSEVANISH, on as usize),
+        );
     }
     if let Some(on) = s.locate_with_ctrl {
-        run("locate with ctrl", spi::set_pv(SPI_SETMOUSESONAR, on as usize));
+        run(
+            "locate with ctrl",
+            spi::set_pv(SPI_SETMOUSESONAR, on as usize),
+        );
     }
     if let Some(v) = s.trails {
         run(
@@ -229,13 +264,22 @@ pub fn apply(s: &MouseSettings) -> Result<()> {
         );
     }
     if let Some(on) = s.click_lock {
-        run("click lock", spi::set_pv(SPI_SETMOUSECLICKLOCK, on as usize));
+        run(
+            "click lock",
+            spi::set_pv(SPI_SETMOUSECLICKLOCK, on as usize),
+        );
     }
     if let Some(v) = s.click_lock_ms {
-        run("click lock time", spi::set_pv(SPI_SETMOUSECLICKLOCKTIME, v as usize));
+        run(
+            "click lock time",
+            spi::set_pv(SPI_SETMOUSECLICKLOCKTIME, v as usize),
+        );
     }
     if let Some(on) = s.snap_to_default_button {
-        run("snap to default button", spi::set_ui(SPI_SETSNAPTODEFBUTTON, on as u32));
+        run(
+            "snap to default button",
+            spi::set_ui(SPI_SETSNAPTODEFBUTTON, on as u32),
+        );
     }
     if let Some(on) = s.mouse_keys {
         run(
@@ -250,7 +294,11 @@ pub fn apply(s: &MouseSettings) -> Result<()> {
             }),
         );
     }
-    if errors.is_empty() { Ok(()) } else { bail!(errors.join("; ")) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        bail!(errors.join("; "))
+    }
 }
 
 /// Whether the acceleration curves are Windows' defaults (`None` = not set, which
@@ -282,9 +330,13 @@ mod tests {
 
     #[test]
     fn toml_fields() {
-        let s: MouseSettings = toml::from_str("pointer_speed = 10\nenhance_precision = false").unwrap();
+        let s: MouseSettings =
+            toml::from_str("pointer_speed = 10\nenhance_precision = false").unwrap();
         assert_eq!(s.pointer_speed, Some(10));
-        assert_eq!(toml::to_string(&s).unwrap(), "pointer_speed = 10\nenhance_precision = false\n");
+        assert_eq!(
+            toml::to_string(&s).unwrap(),
+            "pointer_speed = 10\nenhance_precision = false\n"
+        );
         assert!(toml::from_str::<MouseSettings>("pointer_sped = 3").is_err());
     }
 }

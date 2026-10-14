@@ -3,6 +3,7 @@
 //! Each area has a settings struct whose fields are all optional, `read()` for the
 //! current system values, and `apply()` that writes only the fields that are set.
 
+pub mod audio;
 pub mod keyboard;
 pub mod mouse;
 mod reg;
@@ -13,6 +14,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+pub use audio::AudioSettings;
 pub use keyboard::KeyboardSettings;
 pub use mouse::MouseSettings;
 
@@ -21,6 +23,7 @@ pub use mouse::MouseSettings;
 pub struct WindowsSettings {
     pub mouse: MouseSettings,
     pub keyboard: KeyboardSettings,
+    pub audio: AudioSettings,
 }
 
 impl WindowsSettings {
@@ -44,7 +47,9 @@ impl WindowsSettings {
             .as_table_mut()
             .context("not a section")?;
         sec.insert(field.to_string(), parsed);
-        *self = table.try_into().with_context(|| format!("invalid {path} = {value}"))?;
+        *self = table
+            .try_into()
+            .with_context(|| format!("invalid {path} = {value}"))?;
         Ok(())
     }
 
@@ -52,7 +57,9 @@ impl WindowsSettings {
     pub fn merge(&mut self, other: &WindowsSettings) -> Result<()> {
         let mut table = toml::Table::try_from(&*self)?;
         for (sec, v) in toml::Table::try_from(other)? {
-            if let (Some(toml::Value::Table(dst)), toml::Value::Table(src)) = (table.get_mut(&sec), v) {
+            if let (Some(toml::Value::Table(dst)), toml::Value::Table(src)) =
+                (table.get_mut(&sec), v)
+            {
                 dst.extend(src);
             }
         }
@@ -62,7 +69,11 @@ impl WindowsSettings {
 }
 
 pub fn read() -> Result<WindowsSettings> {
-    Ok(WindowsSettings { mouse: mouse::read()?, keyboard: keyboard::read()? })
+    Ok(WindowsSettings {
+        mouse: mouse::read()?,
+        keyboard: keyboard::read()?,
+        audio: audio::read()?,
+    })
 }
 
 /// Applies `s`. The first time anything is applied, the current values of every
@@ -71,9 +82,7 @@ pub fn apply(s: &WindowsSettings, backup: &Path) -> Result<()> {
     if s.is_empty() {
         return Ok(());
     }
-    if !backup.exists() {
-        save_backup(backup).context("saving backup of current Windows settings")?;
-    }
+    update_backup(backup, s).context("saving backup of current Windows settings")?;
     let mut errors = Vec::new();
     if let Err(e) = mouse::apply(&s.mouse) {
         errors.push(format!("mouse: {e:#}"));
@@ -81,18 +90,43 @@ pub fn apply(s: &WindowsSettings, backup: &Path) -> Result<()> {
     if let Err(e) = keyboard::apply(&s.keyboard) {
         errors.push(format!("keyboard: {e:#}"));
     }
-    if errors.is_empty() { Ok(()) } else { anyhow::bail!(errors.join("; ")) }
+    if let Err(e) = audio::apply(&s.audio) {
+        errors.push(format!("audio: {e:#}"));
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!(errors.join("; "))
+    }
 }
 
-fn save_backup(path: &Path) -> Result<()> {
-    let current = read()?;
+/// Records the current values of every section `s` touches that the backup doesn't
+/// cover yet (sections added in later versions get backed up on first use too).
+fn update_backup(path: &Path, s: &WindowsSettings) -> Result<()> {
+    let mut saved: WindowsSettings = match std::fs::read_to_string(path) {
+        Ok(text) => toml::from_str(&text)?,
+        Err(_) => WindowsSettings::default(),
+    };
+    let before = saved.clone();
+    if saved.mouse == MouseSettings::default() && s.mouse != MouseSettings::default() {
+        saved.mouse = mouse::read()?;
+    }
+    if saved.keyboard == KeyboardSettings::default() && s.keyboard != KeyboardSettings::default() {
+        saved.keyboard = keyboard::read()?;
+    }
+    if saved.audio == AudioSettings::default() && s.audio != AudioSettings::default() {
+        saved.audio = audio::read()?;
+    }
+    if saved == before && path.exists() {
+        return Ok(());
+    }
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let text = format!(
         "# Windows settings as they were before HIDConfig first changed them.\n\
          # `hidconfigctl win restore` puts these back.\n{}",
-        toml::to_string_pretty(&current)?
+        toml::to_string_pretty(&saved)?
     );
     std::fs::write(path, text)?;
     Ok(())
@@ -105,6 +139,7 @@ pub fn restore(backup: &Path) -> Result<WindowsSettings> {
     let saved: WindowsSettings = toml::from_str(&text)?;
     mouse::apply(&saved.mouse)?;
     keyboard::apply(&saved.keyboard)?;
+    audio::apply(&saved.audio)?;
     Ok(saved)
 }
 
@@ -117,12 +152,20 @@ mod tests {
         let mut s = WindowsSettings::default();
         s.set_field("mouse.pointer_speed", "11").unwrap();
         s.set_field("mouse.enhance_precision", "true").unwrap();
-        s.set_field("keyboard.language_hotkey", "ctrl-shift").unwrap();
+        s.set_field("keyboard.language_hotkey", "ctrl-shift")
+            .unwrap();
         assert_eq!(s.mouse.pointer_speed, Some(11));
         assert_eq!(s.mouse.enhance_precision, Some(true));
-        assert_eq!(s.keyboard.language_hotkey, Some(keyboard::LanguageHotkey::CtrlShift));
+        assert_eq!(
+            s.keyboard.language_hotkey,
+            Some(keyboard::LanguageHotkey::CtrlShift)
+        );
         assert!(s.set_field("mouse.pointer_sped", "1").is_err());
         assert!(s.set_field("mouse.pointer_speed", "fast").is_err());
-        assert_eq!(s.mouse.pointer_speed, Some(11), "failed set leaves the value alone");
+        assert_eq!(
+            s.mouse.pointer_speed,
+            Some(11),
+            "failed set leaves the value alone"
+        );
     }
 }

@@ -87,15 +87,33 @@ const DESKTOP_KEY: &str = r"Control Panel\Desktop";
 const NO_BLINK: u32 = u32::MAX;
 
 fn filterkeys() -> Result<FILTERKEYS> {
-    spi::get_struct(SPI_GETFILTERKEYS, FILTERKEYS { cbSize: size_of::<FILTERKEYS>() as u32, ..Default::default() })
+    spi::get_struct(
+        SPI_GETFILTERKEYS,
+        FILTERKEYS {
+            cbSize: size_of::<FILTERKEYS>() as u32,
+            ..Default::default()
+        },
+    )
 }
 
 fn stickykeys() -> Result<STICKYKEYS> {
-    spi::get_struct(SPI_GETSTICKYKEYS, STICKYKEYS { cbSize: size_of::<STICKYKEYS>() as u32, ..Default::default() })
+    spi::get_struct(
+        SPI_GETSTICKYKEYS,
+        STICKYKEYS {
+            cbSize: size_of::<STICKYKEYS>() as u32,
+            ..Default::default()
+        },
+    )
 }
 
 fn togglekeys() -> Result<TOGGLEKEYS> {
-    spi::get_struct(SPI_GETTOGGLEKEYS, TOGGLEKEYS { cbSize: size_of::<TOGGLEKEYS>() as u32, ..Default::default() })
+    spi::get_struct(
+        SPI_GETTOGGLEKEYS,
+        TOGGLEKEYS {
+            cbSize: size_of::<TOGGLEKEYS>() as u32,
+            ..Default::default()
+        },
+    )
 }
 
 fn set_flag(flags: &mut u32, flag: u32, on: bool) {
@@ -122,7 +140,8 @@ pub fn read() -> Result<KeyboardSettings> {
         filter_keys_shortcut: Some(fk.dwFlags & FKF_HOTKEYACTIVE != 0),
         toggle_keys_shortcut: Some(tk.dwFlags & TKF_HOTKEYACTIVE != 0),
         lock_key_beep: Some(tk.dwFlags & TKF_TOGGLEKEYSON != 0),
-        language_hotkey: reg::get_string(TOGGLE_KEY, "Hotkey").and_then(|s| LanguageHotkey::from_code(&s)),
+        language_hotkey: reg::get_string(TOGGLE_KEY, "Hotkey")
+            .and_then(|s| LanguageHotkey::from_code(&s)),
     })
 }
 
@@ -136,13 +155,21 @@ pub fn apply(s: &KeyboardSettings) -> Result<()> {
     if let Some(v) = s.repeat_delay {
         run(
             "repeat delay",
-            if v <= 3 { spi::set_ui(SPI_SETKEYBOARDDELAY, v as u32) } else { Err(anyhow::anyhow!("must be 0..=3")) },
+            if v <= 3 {
+                spi::set_ui(SPI_SETKEYBOARDDELAY, v as u32)
+            } else {
+                Err(anyhow::anyhow!("must be 0..=3"))
+            },
         );
     }
     if let Some(v) = s.repeat_rate {
         run(
             "repeat rate",
-            if v <= 31 { spi::set_ui(SPI_SETKEYBOARDSPEED, v as u32) } else { Err(anyhow::anyhow!("must be 0..=31")) },
+            if v <= 31 {
+                spi::set_ui(SPI_SETKEYBOARDSPEED, v as u32)
+            } else {
+                Err(anyhow::anyhow!("must be 0..=31"))
+            },
         );
     }
     if let Some(ms) = s.caret_blink_ms {
@@ -151,7 +178,11 @@ pub fn apply(s: &KeyboardSettings) -> Result<()> {
             // SetCaretBlinkTime is session-only; the registry value makes it stick.
             // SAFETY: plain call.
             let live = unsafe { SetCaretBlinkTime(v) }.map_err(anyhow::Error::from);
-            let text = if ms == 0 { "-1".to_string() } else { ms.to_string() };
+            let text = if ms == 0 {
+                "-1".to_string()
+            } else {
+                ms.to_string()
+            };
             live.and(reg::set_string(DESKTOP_KEY, "CursorBlinkRate", &text))
         });
     }
@@ -219,7 +250,11 @@ pub fn apply(s: &KeyboardSettings) -> Result<()> {
                 .and(spi::set_ui(SPI_SETLANGTOGGLE, 0)),
         );
     }
-    if errors.is_empty() { Ok(()) } else { bail!(errors.join("; ")) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        bail!(errors.join("; "))
+    }
 }
 
 #[cfg(test)]
@@ -228,7 +263,12 @@ mod tests {
 
     #[test]
     fn language_codes_roundtrip() {
-        for h in [LanguageHotkey::AltShift, LanguageHotkey::CtrlShift, LanguageHotkey::Grave, LanguageHotkey::None] {
+        for h in [
+            LanguageHotkey::AltShift,
+            LanguageHotkey::CtrlShift,
+            LanguageHotkey::Grave,
+            LanguageHotkey::None,
+        ] {
             assert_eq!(LanguageHotkey::from_code(h.code()), Some(h));
         }
     }
