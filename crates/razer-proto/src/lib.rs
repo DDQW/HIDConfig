@@ -151,6 +151,102 @@ pub mod standard {
     }
 }
 
+/// Variable store: write to RAM only, or persist across power cycles.
+pub const NOSTORE: u8 = 0x00;
+pub const VARSTORE: u8 = 0x01;
+
+/// LED ids (`razercommon.h`).
+pub mod led {
+    pub const SCROLL_WHEEL: u8 = 0x01;
+    pub const LOGO: u8 = 0x04;
+    pub const BACKLIGHT: u8 = 0x05;
+}
+
+/// Mouse commands (`razerchromacommon.c` misc section).
+pub mod mouse {
+    use super::{Report, VARSTORE};
+
+    pub fn get_dpi(txn: u8) -> Report {
+        Report::new(txn, 0x04, 0x85, 0x07).with_args(&[VARSTORE])
+    }
+
+    pub fn set_dpi(txn: u8, x: u16, y: u16) -> Report {
+        let [xh, xl] = x.to_be_bytes();
+        let [yh, yl] = y.to_be_bytes();
+        Report::new(txn, 0x04, 0x05, 0x07).with_args(&[VARSTORE, xh, xl, yh, yl, 0, 0])
+    }
+
+    /// `(x, y)` from a `get_dpi` response.
+    pub fn parse_dpi(r: &Report) -> (u16, u16) {
+        (
+            u16::from_be_bytes([r.args[1], r.args[2]]),
+            u16::from_be_bytes([r.args[3], r.args[4]]),
+        )
+    }
+
+    pub fn get_polling_rate(txn: u8) -> Report {
+        Report::new(txn, 0x00, 0x85, 0x01)
+    }
+
+    /// `hz` must be 125, 500 or 1000.
+    pub fn set_polling_rate(txn: u8, hz: u16) -> Option<Report> {
+        let code = match hz {
+            1000 => 0x01,
+            500 => 0x02,
+            125 => 0x08,
+            _ => return None,
+        };
+        Some(Report::new(txn, 0x00, 0x05, 0x01).with_args(&[code]))
+    }
+
+    pub fn parse_polling_rate(r: &Report) -> Option<u16> {
+        match r.args[0] {
+            0x01 => Some(1000),
+            0x02 => Some(500),
+            0x08 => Some(125),
+            _ => None,
+        }
+    }
+}
+
+/// Extended matrix effects (class 0x0F), used by the Viper and most newer devices.
+pub mod extended {
+    use super::{Report, VARSTORE};
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Effect {
+        Off,
+        Static([u8; 3]),
+        Breathing([u8; 3]),
+        Spectrum,
+    }
+
+    pub fn set_effect(txn: u8, led: u8, effect: Effect) -> Report {
+        match effect {
+            Effect::Off => Report::new(txn, 0x0F, 0x02, 0x06).with_args(&[VARSTORE, led, 0x00]),
+            Effect::Static([r, g, b]) => Report::new(txn, 0x0F, 0x02, 0x09)
+                .with_args(&[VARSTORE, led, 0x01, 0, 0, 0x01, r, g, b]),
+            Effect::Breathing([r, g, b]) => Report::new(txn, 0x0F, 0x02, 0x09)
+                .with_args(&[VARSTORE, led, 0x02, 0x01, 0, 0x01, r, g, b]),
+            Effect::Spectrum => {
+                Report::new(txn, 0x0F, 0x02, 0x06).with_args(&[VARSTORE, led, 0x03])
+            }
+        }
+    }
+
+    pub fn get_brightness(txn: u8, led: u8) -> Report {
+        Report::new(txn, 0x0F, 0x84, 0x03).with_args(&[VARSTORE, led])
+    }
+
+    pub fn set_brightness(txn: u8, led: u8, brightness: u8) -> Report {
+        Report::new(txn, 0x0F, 0x04, 0x03).with_args(&[VARSTORE, led, brightness])
+    }
+
+    pub fn parse_brightness(r: &Report) -> u8 {
+        r.args[2]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,6 +257,22 @@ mod tests {
         assert_eq!(&b[..8], &[0x00, 0x1f, 0x00, 0x00, 0x00, 0x02, 0x00, 0x81]);
         // crc = 0x02 ^ 0x81
         assert_eq!(b[88], 0x83);
+    }
+
+    #[test]
+    fn set_dpi_bytes() {
+        let b = mouse::set_dpi(0x1f, 1600, 800).to_bytes();
+        assert_eq!(&b[5..15], &[0x07, 0x04, 0x05, 0x01, 0x06, 0x40, 0x03, 0x20, 0, 0]);
+    }
+
+    #[test]
+    fn static_logo_bytes() {
+        let b = extended::set_effect(0x1f, led::LOGO, extended::Effect::Static([0xff, 0x10, 0]))
+            .to_bytes();
+        assert_eq!(
+            &b[5..17],
+            &[0x09, 0x0f, 0x02, 0x01, 0x04, 0x01, 0, 0, 0x01, 0xff, 0x10, 0x00]
+        );
     }
 
     #[test]
