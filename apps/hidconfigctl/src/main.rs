@@ -321,7 +321,11 @@ enum AudioCmd {
     /// Advanced options of a device: format, enhancements, exclusive mode.
     Options { device: String },
     /// Set the device's default format, e.g. `format "Speakers (Razer" 48000 24`.
-    Format { device: String, rate: u32, bits: u16 },
+    Format {
+        device: String,
+        rate: u32,
+        bits: u16,
+    },
     /// Audio enhancements on/off.
     Enhancements { device: String, state: OnOff },
     /// Allow apps to take exclusive control (and optionally give them priority).
@@ -433,33 +437,65 @@ fn audio(cmd: &AudioCmd) -> Result<()> {
             let e = audio::find(None, device)?;
             let o = audio::device_options(&e.id)?;
             println!("{} ({} channels)", e.name, o.channels);
-            println!("  format:       {}", o.format.map_or("unknown".into(), |f| f.to_string()));
+            println!(
+                "  format:       {}",
+                o.format.map_or("unknown".into(), |f| f.to_string())
+            );
             println!(
                 "  supported:    {}",
-                o.formats.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(" | ")
+                o.formats
+                    .iter()
+                    .map(|f| f.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" | ")
             );
             println!(
                 "  enhancements: {}",
-                o.enhancements.map_or("not available", |on| if on { "on" } else { "off" })
+                o.enhancements
+                    .map_or("not available", |on| if on { "on" } else { "off" })
             );
-            println!("  exclusive:    allowed {}, priority {}", o.exclusive_allowed, o.exclusive_priority);
+            println!(
+                "  exclusive:    allowed {}, priority {}",
+                o.exclusive_allowed, o.exclusive_priority
+            );
         }
         AudioCmd::Format { device, rate, bits } => {
             let e = audio::find(None, device)?;
-            audio::set_device_format(&e.id, audio::SampleFormat { rate: *rate, bits: *bits })?;
+            audio::set_device_format(
+                &e.id,
+                audio::SampleFormat {
+                    rate: *rate,
+                    bits: *bits,
+                },
+            )?;
             let o = audio::device_options(&e.id)?;
-            println!("{}: {}", e.name, o.format.map_or("unknown".into(), |f| f.to_string()));
+            println!(
+                "{}: {}",
+                e.name,
+                o.format.map_or("unknown".into(), |f| f.to_string())
+            );
         }
         AudioCmd::Enhancements { device, state } => {
             let e = audio::find(None, device)?;
             audio::set_enhancements(&e.id, state.on())?;
-            println!("{}: enhancements {:?}", e.name, audio::device_options(&e.id)?.enhancements);
+            println!(
+                "{}: enhancements {:?}",
+                e.name,
+                audio::device_options(&e.id)?.enhancements
+            );
         }
-        AudioCmd::Exclusive { device, state, priority } => {
+        AudioCmd::Exclusive {
+            device,
+            state,
+            priority,
+        } => {
             let e = audio::find(None, device)?;
             audio::set_exclusive(&e.id, Some(state.on()), priority.map(|p| p.on()))?;
             let o = audio::device_options(&e.id)?;
-            println!("{}: exclusive allowed {}, priority {}", e.name, o.exclusive_allowed, o.exclusive_priority);
+            println!(
+                "{}: exclusive allowed {}, priority {}",
+                e.name, o.exclusive_allowed, o.exclusive_priority
+            );
         }
         AudioCmd::Apps => {
             for s in audio::sessions()? {

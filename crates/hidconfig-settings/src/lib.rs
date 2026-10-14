@@ -381,6 +381,22 @@ pub struct Status {
     pub earbuds: Option<EarbudsStatus>,
     /// Current Windows values (not the config).
     pub windows: Option<WindowsSettings>,
+    pub audio: AudioLive,
+}
+
+/// Live audio state: device and app volumes refresh every tick, the heavier
+/// per-device details (formats, spatial) every [`STATUS_EVERY`] or after a change.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct AudioLive {
+    pub endpoints: Vec<hidconfig_win::audio::Endpoint>,
+    pub sessions: Vec<hidconfig_win::audio::Session>,
+    pub details: std::collections::BTreeMap<String, AudioDetail>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct AudioDetail {
+    pub options: Option<hidconfig_win::audio::DeviceOptions>,
+    pub spatial: Option<hidconfig_win::audio::SpatialState>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -428,6 +444,7 @@ pub struct Watcher {
     status: Status,
     status_due: Instant,
     windows_applied: bool,
+    audio_details_due: Instant,
 }
 
 impl Watcher {
@@ -448,6 +465,7 @@ impl Watcher {
             status: Status::default(),
             status_due: Instant::now(),
             windows_applied: false,
+            audio_details_due: Instant::now(),
         })
     }
 
@@ -478,6 +496,63 @@ impl Watcher {
     }
 
     /// Mic mute is a live toggle, not a saved setting.
+    /// Re-reads audio now; `details` also re-probes formats and spatial state.
+    pub fn refresh_audio(&mut self, details: bool, on_event: &mut dyn FnMut(Event)) {
+        if details {
+            self.audio_details_due = Instant::now();
+        }
+        self.tick_audio(on_event);
+    }
+
+    /// Updates the live audio state; re-applies the audio profile when a device appears.
+    fn tick_audio(&mut self, on_event: &mut dyn FnMut(Event)) {
+        use hidconfig_win::audio;
+        let Ok(endpoints) = audio::endpoints() else {
+            return;
+        };
+        let old_ids: Vec<&str> = self
+            .status
+            .audio
+            .endpoints
+            .iter()
+            .map(|e| e.id.as_str())
+            .collect();
+        let appeared = endpoints.iter().any(|e| !old_ids.contains(&e.id.as_str()));
+        let first = self.status.audio.endpoints.is_empty();
+        if appeared && !first && self.config.windows.audio != Default::default() {
+            on_event(match audio::apply(&self.config.windows.audio) {
+                Ok(()) => Event::Applied(Target::Windows),
+                Err(e) => Event::Failed(Target::Windows, format!("audio: {e:#}")),
+            });
+        }
+        if appeared || endpoints.len() != self.status.audio.endpoints.len() {
+            self.audio_details_due = Instant::now();
+        }
+        self.status.audio.endpoints = endpoints;
+        self.status.audio.sessions = audio::sessions().unwrap_or_default();
+        if Instant::now() >= self.audio_details_due {
+            self.status.audio.details = self
+                .status
+                .audio
+                .endpoints
+                .iter()
+                .map(|e| {
+                    let spatial = (e.flow == audio::Flow::Output)
+                        .then(|| audio::spatial(&e.id).ok())
+                        .flatten();
+                    (
+                        e.id.clone(),
+                        AudioDetail {
+                            options: audio::device_options(&e.id).ok(),
+                            spatial,
+                        },
+                    )
+                })
+                .collect();
+            self.audio_details_due = Instant::now() + STATUS_EVERY;
+        }
+    }
+
     pub fn set_mic_muted(&mut self, muted: bool) -> Result<()> {
         let e = Earbuds::open(&self.api)?.context("earbuds dongle not connected")?;
         e.set_mic_muted(muted)?;
@@ -631,6 +706,7 @@ impl Watcher {
             self.refresh_status();
             self.status_due = Instant::now() + STATUS_EVERY;
         }
+        self.tick_audio(on_event);
     }
 
     fn refresh_status(&mut self) {
@@ -664,11 +740,9 @@ impl Watcher {
                 mic_muted: e.mic_muted().ok(),
             }
         });
-        self.status = Status {
-            viper,
-            earbuds,
-            windows: hidconfig_win::read().ok(),
-        };
+        self.status.viper = viper;
+        self.status.earbuds = earbuds;
+        self.status.windows = hidconfig_win::read().ok();
     }
 }
 

@@ -143,6 +143,9 @@ pub struct TrayMenu {
     toggles: Vec<(Toggle, CheckMenuItem)>,
     mic: CheckMenuItem,
     autostart: CheckMenuItem,
+    outputs: Submenu,
+    /// (endpoint id, name, item), rebuilt when the device list changes.
+    output_items: std::cell::RefCell<Vec<(String, String, CheckMenuItem)>>,
 }
 
 fn check(id: String, text: &str) -> CheckMenuItem {
@@ -243,6 +246,7 @@ impl TrayMenu {
             )?,
         ];
 
+        let outputs = Submenu::new("Output device", true);
         let settings = MenuItem::with_id("settings", "Settings…", true, None);
         let autostart_item =
             CheckMenuItem::with_id("autostart", "Start with Windows", true, autostart, None);
@@ -260,6 +264,8 @@ impl TrayMenu {
             menu.append(s)?;
         }
         menu.append(&mic)?;
+        menu.append(&PredefinedMenuItem::separator())?;
+        menu.append(&outputs)?;
         menu.append(&PredefinedMenuItem::separator())?;
         menu.append_items(&[&settings, &autostart_item, &open_config])?;
         menu.append(&PredefinedMenuItem::separator())?;
@@ -283,11 +289,44 @@ impl TrayMenu {
             toggles,
             mic,
             autostart: autostart_item,
+            outputs,
+            output_items: Default::default(),
         })
     }
 
     /// Re-syncs labels and check marks. Values come from what the device reports
     /// when it can, otherwise from the config.
+    fn update_outputs(&self, s: &Snapshot) {
+        use hidconfig_win::audio::Flow;
+        let outs: Vec<_> = s
+            .status
+            .audio
+            .endpoints
+            .iter()
+            .filter(|e| e.flow == Flow::Output)
+            .collect();
+        let mut items = self.output_items.borrow_mut();
+        let same = items.len() == outs.len()
+            && items
+                .iter()
+                .zip(&outs)
+                .all(|((id, name, _), e)| *id == e.id && *name == e.name);
+        if !same {
+            for (_, _, item) in items.drain(..) {
+                let _ = self.outputs.remove(&item);
+            }
+            for (i, e) in outs.iter().enumerate() {
+                let item = check(format!("out:{i}"), &e.name);
+                let _ = self.outputs.append(&item);
+                items.push((e.id.clone(), e.name.clone(), item));
+            }
+            self.outputs.set_enabled(!items.is_empty());
+        }
+        for ((_, _, item), e) in items.iter().zip(&outs) {
+            item.set_checked(e.is_default);
+        }
+    }
+
     pub fn update(&self, s: &Snapshot, autostart: bool) {
         let v = &s.status.viper;
         let cv = &s.config.viper;
@@ -394,6 +433,7 @@ impl TrayMenu {
         self.mic
             .set_checked(es.and_then(|e| e.mic_muted) == Some(false));
         self.autostart.set_checked(autostart);
+        self.update_outputs(s);
     }
 
     /// Turns a clicked item id into an action. Check items have already toggled
@@ -486,6 +526,13 @@ impl TrayMenu {
                 edit(Box::new(move |c| t.set(&mut c.earbuds, on)))
             }
             "mic" => Some(Action::Mic(self.mic.is_checked())),
+            "out" => {
+                let i: usize = arg.parse().ok()?;
+                let name = self.output_items.borrow().get(i)?.1.clone();
+                edit(Box::new(move |c| {
+                    c.windows.audio.default_output = Some(name)
+                }))
+            }
             "settings" => Some(Action::Settings),
             "autostart" => Some(Action::Autostart(self.autostart.is_checked())),
             "config" => Some(Action::OpenConfig),

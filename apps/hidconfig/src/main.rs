@@ -95,6 +95,7 @@ fn run() -> Result<()> {
     ui.global::<AppState>().set_autostart(autostart);
     wire_ui(&ui, &tx);
     wire_windows(&ui, &tx);
+    wire_audio(&ui, &tx);
 
     MenuEvent::set_event_handler(Some(|ev: MenuEvent| {
         let id = ev.id.0;
@@ -145,6 +146,336 @@ pub fn set_stages(c: &mut hidconfig_settings::Config, stages: Vec<StageDpi>, act
 /// Sends a config edit to the worker.
 fn edit(tx: &Sender<Cmd>, f: impl FnOnce(&mut hidconfig_settings::Config) + Send + 'static) {
     let _ = tx.send(Cmd::Edit(Box::new(f)));
+}
+
+/// Runs `f` against the latest snapshot's audio state.
+fn with_audio<R>(f: impl FnOnce(&hidconfig_settings::AudioLive) -> Option<R>) -> Option<R> {
+    let mut out = None;
+    with_app(|app| out = app.snapshot.as_ref().and_then(|s| f(&s.status.audio)));
+    out
+}
+
+fn device_name(id: &str) -> Option<String> {
+    with_audio(|a| {
+        a.endpoints
+            .iter()
+            .find(|e| e.id == id)
+            .map(|e| e.name.clone())
+    })
+}
+
+fn live(tx: &Sender<Cmd>, op: impl FnOnce() -> anyhow::Result<()> + Send + 'static) {
+    let _ = tx.send(Cmd::Audio(Box::new(op)));
+}
+
+fn wire_audio(ui: &SettingsWindow, tx: &Sender<Cmd>) {
+    use hidconfig_win::audio::{self, Ducking, Flow, SampleFormat};
+    let a = ui.global::<AudioState>();
+
+    let t = tx.clone();
+    a.on_volume(move |id, v| {
+        let id = id.to_string();
+        live(&t, move || audio::set_volume(&id, v / 100.0));
+    });
+    let t = tx.clone();
+    a.on_mute(move |id, m| {
+        let id = id.to_string();
+        live(&t, move || audio::set_mute(&id, m));
+    });
+    let t = tx.clone();
+    a.on_app_volume(move |pid, v| {
+        live(&t, move || {
+            audio::set_session(pid as u32, Some(v / 100.0), None).map(|_| ())
+        });
+    });
+    let t = tx.clone();
+    a.on_app_mute(move |pid, m| {
+        live(&t, move || {
+            audio::set_session(pid as u32, None, Some(m)).map(|_| ())
+        });
+    });
+
+    // Profile settings: saved, then applied by the watcher.
+    let t = tx.clone();
+    a.on_make_default(move |id| {
+        let Some((name, flow)) = with_audio(|a| {
+            a.endpoints
+                .iter()
+                .find(|e| e.id == id.as_str())
+                .map(|e| (e.name.clone(), e.flow))
+        }) else {
+            return;
+        };
+        edit(&t, move |c| match flow {
+            Flow::Output => c.windows.audio.default_output = Some(name),
+            Flow::Input => c.windows.audio.default_input = Some(name),
+        });
+    });
+    let t = tx.clone();
+    a.on_spatial(move |id, index| {
+        let Some((name, key)) = with_audio(|a| {
+            let name = a
+                .endpoints
+                .iter()
+                .find(|e| e.id == id.as_str())?
+                .name
+                .clone();
+            let available = &a.details.get(id.as_str())?.spatial.as_ref()?.available;
+            let key = if index == 0 {
+                "off"
+            } else {
+                available.get(index as usize - 1)?
+            };
+            Some((name, key.to_string()))
+        }) else {
+            return;
+        };
+        edit(&t, move |c| {
+            c.windows.audio.devices.entry(name).or_default().spatial = Some(key)
+        });
+    });
+    let t = tx.clone();
+    a.on_format(move |id, index| {
+        let Some((name, f)) = with_audio(|a| {
+            let name = a
+                .endpoints
+                .iter()
+                .find(|e| e.id == id.as_str())?
+                .name
+                .clone();
+            let f: SampleFormat = *a
+                .details
+                .get(id.as_str())?
+                .options
+                .as_ref()?
+                .formats
+                .get(index as usize)?;
+            Some((name, f))
+        }) else {
+            return;
+        };
+        edit(&t, move |c| {
+            let d = c.windows.audio.devices.entry(name).or_default();
+            d.sample_rate = Some(f.rate);
+            d.bit_depth = Some(f.bits);
+        });
+    });
+    let t = tx.clone();
+    a.on_enhancements(move |id, on| {
+        let Some(name) = device_name(&id) else { return };
+        edit(&t, move |c| {
+            c.windows
+                .audio
+                .devices
+                .entry(name)
+                .or_default()
+                .enhancements = Some(on)
+        });
+    });
+    let t = tx.clone();
+    a.on_exclusive(move |id, allowed, priority| {
+        let Some(name) = device_name(&id) else { return };
+        edit(&t, move |c| {
+            let d = c.windows.audio.devices.entry(name).or_default();
+            d.exclusive_allowed = Some(allowed);
+            d.exclusive_priority = Some(priority);
+        });
+    });
+    let t = tx.clone();
+    a.on_comms(move |output, index| {
+        let flow = if output { Flow::Output } else { Flow::Input };
+        let Some(name) = with_audio(|a| {
+            let mut devs = a.endpoints.iter().filter(|e| e.flow == flow);
+            if index == 0 {
+                // "Same as default": follow the current default device.
+                devs.find(|e| e.is_default).map(|e| e.name.clone())
+            } else {
+                devs.nth(index as usize - 1).map(|e| e.name.clone())
+            }
+        }) else {
+            return;
+        };
+        edit(&t, move |c| {
+            if output {
+                c.windows.audio.comms_output = Some(name);
+            } else {
+                c.windows.audio.comms_input = Some(name);
+            }
+        });
+    });
+    let t = tx.clone();
+    a.on_ducking(move |index| {
+        if let Some(&d) = Ducking::ALL.get(index as usize) {
+            edit(&t, move |c| c.windows.audio.ducking = Some(d));
+        }
+    });
+    let t = tx.clone();
+    a.on_mono_changed(move |on| edit(&t, move |c| c.windows.audio.mono = Some(on)));
+}
+
+/// Updates a list model in place when the row count is unchanged, so rows (and a
+/// slider being dragged) aren't recreated on every refresh.
+fn sync_model<T: Clone + PartialEq + 'static>(
+    current: slint::ModelRc<T>,
+    new: Vec<T>,
+) -> Option<slint::ModelRc<T>> {
+    use slint::Model;
+    if let Some(vec) = current.as_any().downcast_ref::<slint::VecModel<T>>()
+        && vec.row_count() == new.len()
+    {
+        for (i, row) in new.into_iter().enumerate() {
+            if vec.row_data(i).as_ref() != Some(&row) {
+                vec.set_row_data(i, row);
+            }
+        }
+        return None;
+    }
+    Some(slint::ModelRc::new(slint::VecModel::from(new)))
+}
+
+/// Reuses `prev` when it already holds `new`, so row data compares equal and
+/// combo boxes aren't reset.
+fn reuse_strings(
+    prev: Option<slint::ModelRc<slint::SharedString>>,
+    new: Vec<slint::SharedString>,
+) -> slint::ModelRc<slint::SharedString> {
+    use slint::Model;
+    match prev {
+        Some(p) if p.iter().eq(new.iter().cloned()) => p,
+        _ => slint::ModelRc::new(slint::VecModel::from(new)),
+    }
+}
+
+fn update_audio(ui: &SettingsWindow, s: &Snapshot) {
+    use hidconfig_win::audio::{self, Flow};
+    let a = ui.global::<AudioState>();
+    let live = &s.status.audio;
+    let previous: Vec<AudioDev> = {
+        use slint::Model;
+        a.get_outputs()
+            .iter()
+            .chain(a.get_inputs().iter())
+            .collect()
+    };
+    let prev_dev = |id: &str| previous.iter().find(|d| d.id == id).cloned();
+    let to_dev = |e: &audio::Endpoint| {
+        let detail = live.details.get(&e.id);
+        let spatial = detail.and_then(|d| d.spatial.as_ref());
+        let opts = detail.and_then(|d| d.options.as_ref());
+        let mut spatial_names = vec![slint::SharedString::from("Off")];
+        let mut spatial_index = 0;
+        let mut note = String::new();
+        if let Some(sp) = spatial {
+            for (i, key) in sp.available.iter().enumerate() {
+                spatial_names.push(audio::spatial_display_name(key).into());
+                if sp.selected.as_deref() == Some(*key) {
+                    spatial_index = i as i32 + 1;
+                }
+            }
+            if sp.selected != sp.active {
+                note = format!(
+                    "Selected, but {} is active",
+                    sp.active
+                        .as_deref()
+                        .map_or("nothing", audio::spatial_display_name)
+                );
+            }
+        }
+        let formats: Vec<slint::SharedString> = opts.map_or(vec![], |o| {
+            o.formats.iter().map(|f| f.to_string().into()).collect()
+        });
+        let format_index = opts
+            .and_then(|o| {
+                o.format
+                    .and_then(|f| o.formats.iter().position(|x| *x == f))
+            })
+            .map_or(-1, |i| i as i32);
+        AudioDev {
+            id: e.id.clone().into(),
+            name: e.name.clone().into(),
+            output: e.flow == Flow::Output,
+            is_default: e.is_default,
+            is_comms: e.is_default_comms,
+            volume: e.volume * 100.0,
+            muted: e.muted,
+            spatial_supported: spatial.is_some_and(|s| s.supported),
+            spatial_names: reuse_strings(prev_dev(&e.id).map(|d| d.spatial_names), spatial_names),
+            spatial_index,
+            spatial_note: note.into(),
+            formats: reuse_strings(prev_dev(&e.id).map(|d| d.formats), formats),
+            format_index,
+            has_enhancements: opts.is_some_and(|o| o.enhancements.is_some()),
+            enhancements: opts.and_then(|o| o.enhancements).unwrap_or(false),
+            exclusive: opts.is_some_and(|o| o.exclusive_allowed),
+            exclusive_priority: opts.is_some_and(|o| o.exclusive_priority),
+        }
+    };
+    let model = |flow| -> Vec<AudioDev> {
+        live.endpoints
+            .iter()
+            .filter(|e| e.flow == flow)
+            .map(to_dev)
+            .collect()
+    };
+    if let Some(m) = sync_model(a.get_outputs(), model(Flow::Output)) {
+        a.set_outputs(m);
+    }
+    if let Some(m) = sync_model(a.get_inputs(), model(Flow::Input)) {
+        a.set_inputs(m);
+    }
+    let apps: Vec<AudioApp> = live
+        .sessions
+        .iter()
+        .map(|x| AudioApp {
+            pid: x.pid as i32,
+            name: x.app.clone().into(),
+            volume: x.volume * 100.0,
+            muted: x.muted,
+        })
+        .collect();
+    if let Some(m) = sync_model(a.get_apps(), apps) {
+        a.set_apps(m);
+    }
+
+    for (flow, set_names, set_index) in [
+        (
+            Flow::Output,
+            &(|n| a.set_comms_output_names(n)) as &dyn Fn(slint::ModelRc<slint::SharedString>),
+            &(|i| a.set_comms_output_index(i)) as &dyn Fn(i32),
+        ),
+        (
+            Flow::Input,
+            &(|n| a.set_comms_input_names(n)) as &dyn Fn(slint::ModelRc<slint::SharedString>),
+            &(|i| a.set_comms_input_index(i)) as &dyn Fn(i32),
+        ),
+    ] {
+        let devs: Vec<&audio::Endpoint> =
+            live.endpoints.iter().filter(|e| e.flow == flow).collect();
+        let mut names = vec![slint::SharedString::from("Same as default")];
+        names.extend(
+            devs.iter()
+                .map(|e| slint::SharedString::from(e.name.as_str())),
+        );
+        set_names(slint::ModelRc::new(slint::VecModel::from(names)));
+        let comms = devs.iter().position(|e| e.is_default_comms);
+        let same = devs.iter().any(|e| e.is_default && e.is_default_comms);
+        set_index(if same {
+            0
+        } else {
+            comms.map_or(0, |i| i as i32 + 1)
+        });
+    }
+    if let Some(w) = &s.status.windows {
+        if let Some(d) = w.audio.ducking {
+            a.set_ducking_index(
+                audio::Ducking::ALL
+                    .iter()
+                    .position(|x| *x == d)
+                    .unwrap_or(1) as i32,
+            );
+        }
+        a.set_mono(w.audio.mono.unwrap_or(false));
+    }
 }
 
 fn wire_windows(ui: &SettingsWindow, tx: &Sender<Cmd>) {
@@ -560,4 +891,5 @@ fn update_ui(ui: &SettingsWindow, s: &Snapshot, autostart: bool) {
     ui.global::<AppState>()
         .set_last_event(s.last_event.clone().into());
     update_windows(ui, s.status.windows.as_ref());
+    update_audio(ui, s);
 }

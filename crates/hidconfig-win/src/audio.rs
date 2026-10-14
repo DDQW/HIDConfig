@@ -447,12 +447,10 @@ pub fn set_session(pid: u32, volume: Option<f32>, muted: Option<bool>) -> Result
 // Spatial sound (Windows Sonic, Dolby Atmos, DTS:X). Reading uses the documented
 // WinRT SpatialAudioDeviceConfiguration.
 
+type FormatGetter = fn() -> windows::core::Result<windows::core::HSTRING>;
+
 /// Known formats: config name, display name, WinRT getter.
-pub const SPATIAL_FORMATS: &[(
-    &str,
-    &str,
-    fn() -> windows::core::Result<windows::core::HSTRING>,
-)] = {
+pub const SPATIAL_FORMATS: &[(&str, &str, FormatGetter)] = {
     use windows::Media::Audio::SpatialAudioFormatSubtype as S;
     &[
         (
@@ -632,7 +630,12 @@ pub struct DeviceOptions {
     pub enhancements: Option<bool>,
 }
 
-fn get_u32_prop(pc: &IPolicyConfig, id: &[u16], fx: bool, key: &PROPERTYKEY) -> Result<Option<u32>> {
+fn get_u32_prop(
+    pc: &IPolicyConfig,
+    id: &[u16],
+    fx: bool,
+    key: &PROPERTYKEY,
+) -> Result<Option<u32>> {
     use windows::Win32::System::{
         Com::StructuredStorage::{PROPVARIANT, PropVariantClear},
         Variant::{VT_EMPTY, VT_UI4},
@@ -666,7 +669,9 @@ fn set_u32_prop(pc: &IPolicyConfig, id: &[u16], fx: bool, key: &PROPERTYKEY, v: 
         let inner = &mut *pv.Anonymous.Anonymous;
         inner.vt = VT_UI4;
         inner.Anonymous.ulVal = v;
-        pc.set_property(PCWSTR(id.as_ptr()), fx, key, &mut pv).ok().context("SetPropertyValue")?;
+        pc.set_property(PCWSTR(id.as_ptr()), fx, key, &mut pv)
+            .ok()
+            .context("SetPropertyValue")?;
     }
     Ok(())
 }
@@ -676,12 +681,15 @@ fn device_format(pc: &IPolicyConfig, id: &[u16]) -> Result<WAVEFORMATEXTENSIBLE>
     let mut p: *mut WAVEFORMATEX = std::ptr::null_mut();
     // SAFETY: the callee allocates with CoTaskMemAlloc; we copy and free it.
     unsafe {
-        pc.device_format(PCWSTR(id.as_ptr()), false, &mut p).ok().context("GetDeviceFormat")?;
+        pc.device_format(PCWSTR(id.as_ptr()), false, &mut p)
+            .ok()
+            .context("GetDeviceFormat")?;
         if p.is_null() {
             bail!("no device format");
         }
         let mut out = WAVEFORMATEXTENSIBLE::default();
-        let len = (size_of::<WAVEFORMATEX>() + (*p).cbSize as usize).min(size_of::<WAVEFORMATEXTENSIBLE>());
+        let len = (size_of::<WAVEFORMATEX>() + (*p).cbSize as usize)
+            .min(size_of::<WAVEFORMATEXTENSIBLE>());
         std::ptr::copy_nonoverlapping(p as *const u8, &mut out as *mut _ as *mut u8, len);
         CoTaskMemFree(Some(p as *const c_void));
         Ok(out)
@@ -694,8 +702,16 @@ fn pcm_format(channels: u16, mask: u32, rate: u32, bits: u16) -> WAVEFORMATEXTEN
 }
 
 /// `container` bits per sample holding `valid` bits (24-in-32 is common).
-fn pcm_format_in(channels: u16, mask: u32, rate: u32, valid: u16, container: u16) -> WAVEFORMATEXTENSIBLE {
-    use windows::Win32::Media::KernelStreaming::{KSDATAFORMAT_SUBTYPE_PCM, WAVE_FORMAT_EXTENSIBLE};
+fn pcm_format_in(
+    channels: u16,
+    mask: u32,
+    rate: u32,
+    valid: u16,
+    container: u16,
+) -> WAVEFORMATEXTENSIBLE {
+    use windows::Win32::Media::KernelStreaming::{
+        KSDATAFORMAT_SUBTYPE_PCM, WAVE_FORMAT_EXTENSIBLE,
+    };
     let block = channels * container.div_ceil(8);
     WAVEFORMATEXTENSIBLE {
         Format: WAVEFORMATEX {
@@ -707,7 +723,9 @@ fn pcm_format_in(channels: u16, mask: u32, rate: u32, valid: u16, container: u16
             wBitsPerSample: container,
             cbSize: (size_of::<WAVEFORMATEXTENSIBLE>() - size_of::<WAVEFORMATEX>()) as u16,
         },
-        Samples: WAVEFORMATEXTENSIBLE_0 { wValidBitsPerSample: valid },
+        Samples: WAVEFORMATEXTENSIBLE_0 {
+            wValidBitsPerSample: valid,
+        },
         dwChannelMask: mask,
         SubFormat: KSDATAFORMAT_SUBTYPE_PCM,
     }
@@ -716,7 +734,13 @@ fn pcm_format_in(channels: u16, mask: u32, rate: u32, valid: u16, container: u16
 fn current_layout(f: &WAVEFORMATEXTENSIBLE) -> (u16, u32) {
     let channels = f.Format.nChannels.max(1);
     // Fall back to stereo/mono speaker masks for plain WAVEFORMATEX formats.
-    let mask = if f.Format.cbSize >= 22 { f.dwChannelMask } else if channels == 1 { 0x4 } else { 0x3 };
+    let mask = if f.Format.cbSize >= 22 {
+        f.dwChannelMask
+    } else if channels == 1 {
+        0x4
+    } else {
+        0x3
+    };
     (channels, mask)
 }
 
@@ -727,14 +751,23 @@ fn audio_client(endpoint_id: &str) -> Result<IAudioClient> {
 
 /// The exclusive-mode format the device accepts for `rate`/`bits`, trying a packed
 /// container first and then the next larger one (24-in-32, 16-in-32 ...).
-fn accepted_format(client: &IAudioClient, channels: u16, mask: u32, rate: u32, bits: u16) -> Option<WAVEFORMATEXTENSIBLE> {
-    [bits, 32].into_iter().filter(|c| *c >= bits).find_map(|container| {
-        let f = pcm_format_in(channels, mask, rate, bits, container);
-        // SAFETY: f is fully initialised; no closest-match out param.
-        unsafe { client.IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &f.Format, None) }
-            .is_ok()
-            .then_some(f)
-    })
+fn accepted_format(
+    client: &IAudioClient,
+    channels: u16,
+    mask: u32,
+    rate: u32,
+    bits: u16,
+) -> Option<WAVEFORMATEXTENSIBLE> {
+    [bits, 32]
+        .into_iter()
+        .filter(|c| *c >= bits)
+        .find_map(|container| {
+            let f = pcm_format_in(channels, mask, rate, bits, container);
+            // SAFETY: f is fully initialised; no closest-match out param.
+            unsafe { client.IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &f.Format, None) }
+                .is_ok()
+                .then_some(f)
+        })
 }
 
 pub fn device_options(endpoint_id: &str) -> Result<DeviceOptions> {
@@ -763,10 +796,19 @@ pub fn device_options(endpoint_id: &str) -> Result<DeviceOptions> {
             }
         }
     }
-    let exclusive_allowed = get_u32_prop(&pc, &id, false, &PKEY_EXCLUSIVE_ALLOWED)?.unwrap_or(1) != 0;
-    let exclusive_priority = get_u32_prop(&pc, &id, false, &PKEY_EXCLUSIVE_PRIORITY)?.unwrap_or(1) != 0;
+    let exclusive_allowed =
+        get_u32_prop(&pc, &id, false, &PKEY_EXCLUSIVE_ALLOWED)?.unwrap_or(1) != 0;
+    let exclusive_priority =
+        get_u32_prop(&pc, &id, false, &PKEY_EXCLUSIVE_PRIORITY)?.unwrap_or(1) != 0;
     let enhancements = get_u32_prop(&pc, &id, true, &PKEY_DISABLE_SYSFX)?.map(|d| d == 0);
-    Ok(DeviceOptions { channels, format, formats, exclusive_allowed, exclusive_priority, enhancements })
+    Ok(DeviceOptions {
+        channels,
+        format,
+        formats,
+        exclusive_allowed,
+        exclusive_priority,
+        enhancements,
+    })
 }
 
 pub fn set_device_format(endpoint_id: &str, f: SampleFormat) -> Result<()> {
@@ -793,7 +835,11 @@ pub fn set_device_format(endpoint_id: &str, f: SampleFormat) -> Result<()> {
     Ok(())
 }
 
-pub fn set_exclusive(endpoint_id: &str, allowed: Option<bool>, priority: Option<bool>) -> Result<()> {
+pub fn set_exclusive(
+    endpoint_id: &str,
+    allowed: Option<bool>,
+    priority: Option<bool>,
+) -> Result<()> {
     let pc = policy_config()?;
     let id = wide(endpoint_id);
     if let Some(a) = allowed {
@@ -944,12 +990,20 @@ pub fn apply_device(e: &Endpoint, s: &DeviceSettings) -> Result<()> {
     {
         run("enhancements", set_enhancements(&e.id, on));
     }
-    let ex_a = s.exclusive_allowed.filter(|v| now.exclusive_allowed != Some(*v));
-    let ex_p = s.exclusive_priority.filter(|v| now.exclusive_priority != Some(*v));
+    let ex_a = s
+        .exclusive_allowed
+        .filter(|v| now.exclusive_allowed != Some(*v));
+    let ex_p = s
+        .exclusive_priority
+        .filter(|v| now.exclusive_priority != Some(*v));
     if ex_a.is_some() || ex_p.is_some() {
         run("exclusive mode", set_exclusive(&e.id, ex_a, ex_p));
     }
-    if errors.is_empty() { Ok(()) } else { bail!(errors.join("; ")) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        bail!(errors.join("; "))
+    }
 }
 
 pub fn read() -> Result<AudioSettings> {

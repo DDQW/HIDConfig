@@ -17,6 +17,8 @@ pub enum Cmd {
     MicOn(bool),
     /// Stop managing Windows settings and put the backed-up values back.
     WinRestore,
+    /// A live audio change (volume, mute) that isn't saved in the profile.
+    Audio(Box<dyn FnOnce() -> anyhow::Result<()> + Send>),
     Quit,
 }
 
@@ -74,6 +76,7 @@ fn run(rx: Receiver<Cmd>, publish: impl Fn(Snapshot)) {
                 if let Err(e) = watcher.update_config(edit, &mut on_event) {
                     on_event(Event::ConfigError(format!("{e:#}")));
                 }
+                watcher.refresh_audio(true, &mut on_event);
             }
             Ok(Cmd::MicOn(on)) => match watcher.set_mic_muted(!on) {
                 Ok(()) => on_event(Event::Applied(hidconfig_settings::Target::Earbuds)),
@@ -97,6 +100,15 @@ fn run(rx: Receiver<Cmd>, publish: impl Fn(Snapshot)) {
                 }
                 watcher.refresh_status_soon();
                 watcher.tick(&mut on_event);
+            }
+            Ok(Cmd::Audio(op)) => {
+                if let Err(e) = op() {
+                    on_event(Event::Failed(
+                        hidconfig_settings::Target::Windows,
+                        format!("audio: {e:#}"),
+                    ));
+                }
+                watcher.refresh_audio(false, &mut on_event);
             }
             Ok(Cmd::Quit) | Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => {

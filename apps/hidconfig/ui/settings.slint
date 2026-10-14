@@ -1001,6 +1001,292 @@ component RestoreCard inherits Card {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Audio page
+
+export struct AudioDev {
+    id: string,
+    name: string,
+    output: bool,
+    is-default: bool,
+    is-comms: bool,
+    volume: float,          // 0..100
+    muted: bool,
+    spatial-supported: bool,
+    spatial-names: [string], // "Off" first
+    spatial-index: int,
+    spatial-note: string,   // e.g. "selected but not active"
+    formats: [string],
+    format-index: int,
+    has-enhancements: bool,
+    enhancements: bool,
+    exclusive: bool,
+    exclusive-priority: bool,
+}
+
+export struct AudioApp {
+    pid: int,
+    name: string,
+    volume: float,          // 0..100
+    muted: bool,
+}
+
+export global AudioState {
+    in property <[AudioDev]> outputs;
+    in property <[AudioDev]> inputs;
+    in property <[AudioApp]> apps;
+    // "Same as default" first, then device names.
+    in property <[string]> comms-output-names;
+    in property <[string]> comms-input-names;
+    in property <int> comms-output-index;
+    in property <int> comms-input-index;
+    in property <int> ducking-index: 1;
+    in property <bool> mono;
+    in-out property <string> expanded;
+
+    callback make-default(string /* id */);
+    callback volume(string /* id */, float);
+    callback mute(string /* id */, bool);
+    callback spatial(string /* id */, int);
+    callback format(string /* id */, int);
+    callback enhancements(string /* id */, bool);
+    callback exclusive(string /* id */, bool /* allowed */, bool /* priority */);
+    callback app-volume(int /* pid */, float);
+    callback app-mute(int /* pid */, bool);
+    callback comms(bool /* output */, int /* index */);
+    callback ducking(int);
+    callback mono-changed(bool);
+}
+
+component MuteButton inherits Rectangle {
+    in property <bool> muted;
+    callback clicked();
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    background: muted ? Theme.bad.with-alpha(0.25) : touch.has-hover ? Palette.foreground.with-alpha(0.08) : transparent;
+    Text {
+        // Speaker / muted glyphs from Segoe Fluent Icons; fall back to text if absent.
+        text: root.muted ? "\u{E74F}" : "\u{E767}";
+        font-family: "Segoe Fluent Icons";
+        font-size: 15px;
+        color: root.muted ? Theme.bad : Palette.foreground;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component VolumeRow inherits HorizontalLayout {
+    in property <float> volume;
+    in property <bool> muted;
+    callback set-volume(float);
+    callback set-mute(bool);
+    spacing: 8px;
+    MuteButton {
+        muted: root.muted;
+        clicked => { root.set-mute(!root.muted); }
+    }
+    Slider {
+        property <float> source: root.volume;
+        changed source => { self.value = self.source; }
+        minimum: 0;
+        maximum: 100;
+        value: root.volume;
+        changed(v) => { root.set-volume(v); }
+    }
+    Text {
+        width: 40px;
+        text: round(root.volume) + "%";
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+}
+
+component DeviceRow inherits VerticalLayout {
+    in property <AudioDev> dev;
+    private property <bool> open: AudioState.expanded == dev.id;
+    spacing: 6px;
+
+    HorizontalLayout {
+        spacing: 8px;
+        Text {
+            horizontal-stretch: 1;
+            text: root.dev.name;
+            overflow: elide;
+            vertical-alignment: center;
+            font-weight: root.dev.is-default ? 600 : 400;
+        }
+        if root.dev.is-default: VerticalLayout {
+            alignment: center;
+            Chip { text: "Default"; tint: Theme.ok; }
+        }
+        if root.dev.is-comms: VerticalLayout {
+            alignment: center;
+            Chip { text: "Calls"; tint: #4aa3ff; }
+        }
+        if !root.dev.is-default: Button {
+            text: "Make default";
+            clicked => { AudioState.make-default(root.dev.id); }
+        }
+        Button {
+            text: root.open ? "Hide options" : "Options";
+            clicked => { AudioState.expanded = root.open ? "" : root.dev.id; }
+        }
+    }
+    VolumeRow {
+        volume: root.dev.volume;
+        muted: root.dev.muted;
+        set-volume(v) => { AudioState.volume(root.dev.id, v); }
+        set-mute(m) => { AudioState.mute(root.dev.id, m); }
+    }
+
+    if root.open: Rectangle {
+        background: Palette.background;
+        border-radius: 6px;
+        VerticalLayout {
+            padding: 12px;
+            spacing: 8px;
+            if root.dev.output && root.dev.spatial-supported: Row {
+                label: "Spatial sound";
+                hint: root.dev.spatial-note;
+                ComboBox {
+                    width: 230px;
+                    model: root.dev.spatial-names;
+                    property <int> source: root.dev.spatial-index;
+                    changed source => { self.current-index = self.source; }
+                    current-index: root.dev.spatial-index;
+                    selected => { AudioState.spatial(root.dev.id, self.current-index); }
+                }
+            }
+            if root.dev.formats.length > 0: Row {
+                label: "Format";
+                hint: "Shared-mode sample rate / depth";
+                ComboBox {
+                    width: 230px;
+                    model: root.dev.formats;
+                    property <int> source: root.dev.format-index;
+                    changed source => { self.current-index = self.source; }
+                    current-index: root.dev.format-index;
+                    selected => { AudioState.format(root.dev.id, self.current-index); }
+                }
+            }
+            if root.dev.has-enhancements: Row {
+                label: "Audio enhancements";
+                hint: "Driver effects (EQ, virtual surround ...)";
+                Switch {
+                    property <bool> source: root.dev.enhancements;
+                    changed source => { self.checked = self.source; }
+                    checked: root.dev.enhancements;
+                    toggled => { AudioState.enhancements(root.dev.id, self.checked); }
+                }
+            }
+            Row {
+                label: "Exclusive mode";
+                hint: "Apps may take sole control";
+                Switch {
+                    property <bool> source: root.dev.exclusive;
+                    changed source => { self.checked = self.source; }
+                    checked: root.dev.exclusive;
+                    toggled => { AudioState.exclusive(root.dev.id, self.checked, root.dev.exclusive-priority); }
+                }
+            }
+            if root.dev.exclusive: Row {
+                label: "Exclusive apps first";
+                hint: "Give them priority";
+                Switch {
+                    property <bool> source: root.dev.exclusive-priority;
+                    changed source => { self.checked = self.source; }
+                    checked: root.dev.exclusive-priority;
+                    toggled => { AudioState.exclusive(root.dev.id, root.dev.exclusive, self.checked); }
+                }
+            }
+        }
+    }
+}
+
+component OutputsCard inherits Card {
+    title: "Output";
+    for d in AudioState.outputs: DeviceRow { dev: d; }
+    if AudioState.outputs.length == 0: Placeholder { text: "No active output devices."; }
+}
+
+component InputsCard inherits Card {
+    title: "Input";
+    for d in AudioState.inputs: DeviceRow { dev: d; }
+    if AudioState.inputs.length == 0: Placeholder { text: "No active input devices."; }
+}
+
+component AppsCard inherits Card {
+    title: "Apps";
+    summary: AudioState.apps.length + " playing";
+    for a in AudioState.apps: VerticalLayout {
+        spacing: 2px;
+        Text {
+            text: a.name;
+            overflow: elide;
+        }
+        VolumeRow {
+            volume: a.volume;
+            muted: a.muted;
+            set-volume(v) => { AudioState.app-volume(a.pid, v); }
+            set-mute(m) => { AudioState.app-mute(a.pid, m); }
+        }
+    }
+    if AudioState.apps.length == 0: Placeholder { text: "No app is using audio right now."; }
+}
+
+component CallsCard inherits Card {
+    title: "Calls & accessibility";
+    Row {
+        label: "Call output";
+        ComboBox {
+            width: 260px;
+            model: AudioState.comms-output-names;
+            property <int> source: AudioState.comms-output-index;
+            changed source => { self.current-index = self.source; }
+            current-index: AudioState.comms-output-index;
+            selected => { AudioState.comms(true, self.current-index); }
+        }
+    }
+    Row {
+        label: "Call microphone";
+        ComboBox {
+            width: 260px;
+            model: AudioState.comms-input-names;
+            property <int> source: AudioState.comms-input-index;
+            changed source => { self.current-index = self.source; }
+            current-index: AudioState.comms-input-index;
+            selected => { AudioState.comms(false, self.current-index); }
+        }
+    }
+    Row {
+        label: "During calls";
+        hint: "What happens to other sounds";
+        ComboBox {
+            width: 260px;
+            model: ["Mute other sounds", "Reduce others by 80 %", "Reduce others by 50 %", "Do nothing"];
+            property <int> source: AudioState.ducking-index;
+            changed source => { self.current-index = self.source; }
+            current-index: AudioState.ducking-index;
+            selected => { AudioState.ducking(self.current-index); }
+        }
+    }
+    Row {
+        label: "Mono audio";
+        hint: "Same sound in both ears";
+        Switch {
+            property <bool> source: AudioState.mono;
+            changed source => { self.checked = self.source; }
+            checked: AudioState.mono;
+            toggled => { AudioState.mono-changed(self.checked); }
+        }
+    }
+}
+
 component NavTab inherits Rectangle {
     in property <string> text;
     in property <bool> active;
@@ -1034,7 +1320,7 @@ export component SettingsWindow inherits Window {
     min-height: 300px;
     background: Palette.background;
 
-    // 0 = devices, 1 = mouse, 2 = keyboard
+    // 0 = devices, 1 = mouse, 2 = keyboard, 3 = audio
     in-out property <int> page;
     // Two columns once there is room for two readable cards side by side.
     private property <bool> wide: self.width >= 1080px;
@@ -1049,6 +1335,7 @@ export component SettingsWindow inherits Window {
                 NavTab { text: "Devices"; active: root.page == 0; clicked => { root.page = 0; } }
                 NavTab { text: "Mouse"; active: root.page == 1; clicked => { root.page = 1; } }
                 NavTab { text: "Keyboard"; active: root.page == 2; clicked => { root.page = 2; } }
+                NavTab { text: "Audio"; active: root.page == 3; clicked => { root.page = 3; } }
             }
             Rectangle {
                 y: parent.height - 1px;
@@ -1130,6 +1417,43 @@ export component SettingsWindow inherits Window {
                         MouseAdvancedCard { }
                         PointerHelpersCard { }
                         RestoreCard { }
+                    }
+                }
+
+                // ---- Audio ----
+                if root.page == 3 && root.wide: HorizontalLayout {
+                    alignment: center;
+                    padding: 20px;
+                    spacing: 16px;
+                    VerticalLayout {
+                        max-width: 640px;
+                        horizontal-stretch: 1;
+                        alignment: start;
+                        spacing: 16px;
+                        OutputsCard { }
+                        InputsCard { }
+                    }
+                    VerticalLayout {
+                        max-width: 640px;
+                        horizontal-stretch: 1;
+                        alignment: start;
+                        spacing: 16px;
+                        AppsCard { }
+                        CallsCard { }
+                    }
+                }
+                if root.page == 3 && !root.wide: HorizontalLayout {
+                    alignment: center;
+                    VerticalLayout {
+                        max-width: 640px;
+                        min-width: 420px;
+                        horizontal-stretch: 1;
+                        padding: 20px;
+                        spacing: 16px;
+                        OutputsCard { }
+                        InputsCard { }
+                        AppsCard { }
+                        CallsCard { }
                     }
                 }
 
