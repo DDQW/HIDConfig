@@ -247,7 +247,7 @@ pub fn drift(samples: &[(f64, f64)]) -> Option<Drift> {
         .fold(None, |m: Option<f64>, d| Some(m.map_or(d, |m| m.max(d))))?;
     Some(Drift {
         max,
-        suggested_deadzone: ((max + 0.02) * 100.0).ceil() / 100.0,
+        suggested_deadzone: (((max + 0.02) * 100.0) - 1e-9).ceil() / 100.0,
     })
 }
 
