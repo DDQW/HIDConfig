@@ -244,7 +244,7 @@ fn tooltip(s: &Snapshot) -> String {
     }
     match &s.status.earbuds {
         Some(e) if e.connected => parts.push(format!("Buds {}", battery_text(e))),
-        Some(_) => parts.push("Buds in case".into()),
+        Some(_) => parts.push("Buds not connected".into()),
         None => {}
     }
     if parts.is_empty() {

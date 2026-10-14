@@ -263,7 +263,7 @@ impl TrayMenu {
         let ce = &s.config.earbuds;
         self.buds_header.set_text(match es {
             None => "Hammerhead V3 (dongle not connected)".into(),
-            Some(e) if !e.connected => "Hammerhead V3 (earbuds in case)".into(),
+            Some(e) if !e.connected => "Hammerhead V3 (not connected: in case or asleep)".into(),
             Some(e) => format!("Hammerhead V3 · {}", battery_text(e)),
         });
         let live = es.is_some_and(|e| e.connected);

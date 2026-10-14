@@ -49,7 +49,10 @@ fn run(rx: Receiver<Cmd>, publish: impl Fn(Snapshot)) {
     let last_event = std::cell::RefCell::new(String::new());
     let mut on_event = |ev: Event| {
         let text = describe(&ev);
-        log(&text);
+        // Waiting repeats every poll; only log changes.
+        if *last_event.borrow() != text {
+            log(&text);
+        }
         *last_event.borrow_mut() = text;
     };
     let mut watcher = match Watcher::new(&mut on_event) {

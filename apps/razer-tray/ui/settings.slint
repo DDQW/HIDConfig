@@ -200,7 +200,7 @@ export component SettingsWindow inherits Window {
             GroupBox {
                 title: !dongle-present ? "Hammerhead V3 HyperSpeed (dongle not connected)"
                     : buds-connected ? "Hammerhead V3 HyperSpeed"
-                    : "Hammerhead V3 HyperSpeed (earbuds in case)";
+                    : "Hammerhead V3 HyperSpeed (not connected: in case or asleep)";
                 enabled: dongle-present;
                 VerticalLayout {
                     spacing: 10px;
