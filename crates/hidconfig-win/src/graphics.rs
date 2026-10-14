@@ -164,6 +164,37 @@ pub(crate) fn acm(adapter: LUID, target: u32) -> Option<AcmState> {
     })
 }
 
+/// HDR (supported, user-enabled) from the 24H2 info, which reports HDR separately
+/// from ACM. `None` on older Windows.
+pub(crate) fn hdr_state(adapter: LUID, target: u32) -> Option<(bool, bool)> {
+    let mut v = AdvancedColorInfo2 {
+        header: header::<AdvancedColorInfo2>(GET_ADVANCED_COLOR_INFO_2, adapter, target),
+        ..Default::default()
+    };
+    // SAFETY: header size describes AdvancedColorInfo2.
+    if unsafe { DisplayConfigGetDeviceInfo(&mut v.header) } != 0 {
+        return None;
+    }
+    // bit 4 highDynamicRangeSupported, bit 5 highDynamicRangeUserEnabled
+    Some((v.value & (1 << 4) != 0, v.value & (1 << 5) != 0))
+}
+
+/// DISPLAYCONFIG_DEVICE_INFO_SET_HDR_STATE (24H2+): switches HDR without touching ACM.
+const SET_HDR_STATE: i32 = 16;
+
+pub(crate) fn set_hdr_24h2(adapter: LUID, target: u32, on: bool) -> Result<()> {
+    let v = SetWcgState {
+        header: header::<SetWcgState>(SET_HDR_STATE, adapter, target),
+        value: on as u32,
+    };
+    // SAFETY: same layout as DISPLAYCONFIG_SET_HDR_STATE (header + bit field).
+    let r = unsafe { DisplayConfigSetDeviceInfo(&v.header) };
+    if r != 0 {
+        bail!("switching HDR failed ({r})");
+    }
+    Ok(())
+}
+
 pub(crate) fn set_acm(adapter: LUID, target: u32, on: bool) -> Result<()> {
     let v = SetWcgState {
         header: header::<SetWcgState>(SET_WCG_STATE, adapter, target),
@@ -518,7 +549,11 @@ pub fn set_warm_filter(kelvin: u32) -> Result<()> {
 pub fn set_color_ramp(kelvin: u32, gamma: f64) -> Result<()> {
     let gamma = gamma.clamp(0.3, 3.0);
     // "Off" must be an exact identity ramp, not the approximation at 6500 K.
-    let (r, g, b) = if kelvin >= 6500 { (1.0, 1.0, 1.0) } else { kelvin_to_rgb(kelvin.max(1900)) };
+    let (r, g, b) = if kelvin >= 6500 {
+        (1.0, 1.0, 1.0)
+    } else {
+        kelvin_to_rgb(kelvin.max(1900))
+    };
     let mut ramp = [[0u16; 256]; 3];
     for (channel, mult) in ramp.iter_mut().zip([r, g, b]) {
         for (i, v) in channel.iter_mut().enumerate() {

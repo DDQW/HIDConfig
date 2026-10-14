@@ -293,6 +293,10 @@ fn target_name(p: &Path) -> Option<String> {
 
 /// (supported, enabled)
 fn hdr(p: &Path) -> (bool, bool) {
+    // Windows 11 24H2+ reports HDR separately; the old bit also turns on with ACM.
+    if let Some(state) = crate::graphics::hdr_state(p.target.adapterId, p.target.id) {
+        return state;
+    }
     let mut v = DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO {
         header: header::<DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO>(
             DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO.0,
@@ -313,6 +317,9 @@ fn hdr(p: &Path) -> (bool, bool) {
 }
 
 fn set_hdr_on(p: &Path, on: bool) -> Result<()> {
+    if crate::graphics::hdr_state(p.target.adapterId, p.target.id).is_some() {
+        return crate::graphics::set_hdr_24h2(p.target.adapterId, p.target.id, on);
+    }
     let mut v = DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE {
         header: header::<DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE>(
             DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE.0,

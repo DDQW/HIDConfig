@@ -24,11 +24,12 @@ component Row inherits HorizontalLayout {
     VerticalLayout {
         width: Theme.label-width;
         alignment: center;
-        Text { text: label; }
+        Text { text: label; wrap: word-wrap; }
         if hint != "": Text {
             text: hint;
             font-size: 11px;
             color: Theme.muted;
+            wrap: word-wrap;
         }
     }
     @children
@@ -1886,7 +1887,7 @@ component DisplayCard inherits Card {
             clicked => { DisplayState.expanded = root.open ? "" : root.d.device; }
         }
     }
-    if root.d.ddc && root.d.kelvin >= 0: WideRow {
+    if root.d.ddc && root.open && root.d.kelvin >= 0: WideRow {
         label: "Colour temperature";
         Slider {
             property <int> source: root.d.kelvin;
@@ -1904,6 +1905,10 @@ component DisplayCard inherits Card {
             unit: "K";
             commit(v) => { DisplayState.kelvin(root.d.device, v); }
         }
+    }
+    if root.d.ddc && root.open && root.d.kelvin >= 0: Placeholder {
+        text: "Many monitors switch to their nearest colour preset when you set a temperature.";
+        font-size: 11px;
     }
     if root.d.ddc && root.open && root.d.languages.length > 0: Row {
         label: "Menu language";
