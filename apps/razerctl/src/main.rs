@@ -42,6 +42,15 @@ enum Cmd {
     Watch,
     /// Set DPI (one value for both axes, or X and Y).
     Dpi { x: u16, y: Option<u16> },
+    /// Set DPI stages, e.g. `stages 400 800 1600x1200 --active 2` (1-5 stages).
+    Stages {
+        /// Each stage as DPI or XxY.
+        #[arg(required = true, num_args = 1..=5)]
+        dpi: Vec<String>,
+        /// Active stage, 1-based.
+        #[arg(long, default_value_t = 1)]
+        active: u8,
+    },
     /// Set polling rate in Hz (125, 500, 1000).
     Poll { hz: u16 },
     /// Set the logo LED effect.
@@ -103,11 +112,30 @@ fn run(dev: &Device, cmd: &Cmd) -> Result<()> {
             println!("  dpi:        {x} x {y}");
             println!("  polling:    {} Hz", dev.polling_rate()?);
             println!("  brightness: {}", dev.logo_brightness()?);
+            let st = dev.dpi_stages()?;
+            let list: Vec<String> = st
+                .stages
+                .iter()
+                .enumerate()
+                .map(|(i, &(x, y))| {
+                    let mark = if i + 1 == st.active as usize { "*" } else { "" };
+                    if x == y { format!("{mark}{x}") } else { format!("{mark}{x}x{y}") }
+                })
+                .collect();
+            println!("  dpi stages: {}  (* = active)", list.join(" "));
         }
         Cmd::Dpi { x, y } => {
             dev.set_dpi(x, y.unwrap_or(x))?;
             let (rx, ry) = dev.dpi()?;
             println!("{}: dpi now {rx} x {ry}", dev.model.name);
+        }
+        Cmd::Stages { ref dpi, active } => {
+            let stages = dpi.iter().map(|s| parse_xy(s)).collect::<Result<Vec<_>>>()?;
+            dev.set_dpi_stages(&razer_proto::mouse::DpiStages { active, stages })?;
+            let st = dev.dpi_stages()?;
+            println!("{}: stages now {:?}, active {}", dev.model.name, st.stages, st.active);
+            let (x, y) = dev.dpi()?;
+            println!("{}: current dpi {x} x {y}", dev.model.name);
         }
         Cmd::Poll { hz } => {
             dev.set_polling_rate(hz)?;
@@ -133,6 +161,12 @@ fn run(dev: &Device, cmd: &Cmd) -> Result<()> {
 }
 
 use razer_settings::parse_rgb;
+
+/// `1600` or `1600x1200`.
+fn parse_xy(s: &str) -> Result<(u16, u16)> {
+    let (x, y) = s.split_once(['x', 'X']).unwrap_or((s, s));
+    Ok((x.parse().context("bad DPI")?, y.parse().context("bad DPI")?))
+}
 
 fn show_config() -> Result<()> {
     let p = razer_settings::path()?;

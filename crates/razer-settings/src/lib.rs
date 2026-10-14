@@ -15,6 +15,7 @@ use razer_hid::{
 };
 use razer_proto::{
     extended::Effect,
+    mouse::DpiStages,
     hyperspeed::{Anc, EqPreset},
 };
 use serde::{Deserialize, Serialize};
@@ -30,10 +31,49 @@ pub struct Config {
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Viper {
+    /// Live DPI. Applied after the stages, so it overrides the active stage's value
+    /// until the DPI button is pressed.
     pub dpi: Option<u16>,
+    /// Separate Y DPI; defaults to `dpi`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dpi_y: Option<u16>,
+    /// 1-5 stages cycled by the DPI button; each `800` or `[800, 600]` (X, Y).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dpi_stages: Option<Vec<StageDpi>>,
+    /// Active stage, 1-based (default 1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dpi_stage: Option<u8>,
     pub polling_hz: Option<u16>,
     pub logo: Option<Logo>,
     pub brightness: Option<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StageDpi {
+    Same(u16),
+    Xy([u16; 2]),
+}
+
+impl StageDpi {
+    pub fn xy(self) -> (u16, u16) {
+        match self {
+            StageDpi::Same(d) => (d, d),
+            StageDpi::Xy([x, y]) => (x, y),
+        }
+    }
+
+    pub fn from_xy((x, y): (u16, u16)) -> Self {
+        if x == y { StageDpi::Same(x) } else { StageDpi::Xy([x, y]) }
+    }
+}
+
+impl Viper {
+    /// Stages in device form, if configured.
+    pub fn stages(&self) -> Option<DpiStages> {
+        let stages: Vec<_> = self.dpi_stages.as_ref()?.iter().map(|s| s.xy()).collect();
+        Some(DpiStages { active: self.dpi_stage.unwrap_or(1), stages })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -165,8 +205,12 @@ pub fn apply_viper(dev: &Device, cfg: &Viper) -> Result<()> {
             errors.push(format!("{what}: {e:#}"));
         }
     };
+    // Stages first: writing them also sets the live DPI to the active stage.
+    if let Some(st) = cfg.stages() {
+        run("dpi stages", dev.set_dpi_stages(&st));
+    }
     if let Some(d) = cfg.dpi {
-        run("dpi", dev.set_dpi(d, d));
+        run("dpi", dev.set_dpi(d, cfg.dpi_y.unwrap_or(d)));
     }
     if let Some(hz) = cfg.polling_hz {
         run("polling", dev.set_polling_rate(hz));
@@ -241,8 +285,12 @@ fn finish(errors: Vec<String>) -> Result<()> {
 pub fn snapshot(api: &HidApi, base: &Config) -> Result<Config> {
     let mut cfg = base.clone();
     for dev in razer_hid::open_all(api).into_iter().flatten() {
-        let (x, _) = dev.dpi()?;
+        let (x, y) = dev.dpi()?;
         cfg.viper.dpi = Some(x);
+        cfg.viper.dpi_y = (y != x).then_some(y);
+        let st = dev.dpi_stages()?;
+        cfg.viper.dpi_stages = Some(st.stages.iter().map(|&s| StageDpi::from_xy(s)).collect());
+        cfg.viper.dpi_stage = Some(st.active);
         cfg.viper.polling_hz = Some(dev.polling_rate()?);
         cfg.viper.brightness = Some(dev.logo_brightness()?);
     }
@@ -297,6 +345,8 @@ pub struct Status {
 pub struct ViperStatus {
     pub name: &'static str,
     pub dpi: u16,
+    pub dpi_y: u16,
+    pub stages: Option<DpiStages>,
     pub polling_hz: u16,
     pub brightness: u8,
 }
@@ -520,9 +570,12 @@ impl Watcher {
 
     fn refresh_status(&mut self) {
         let viper = razer_hid::open_all(&self.api).into_iter().flatten().next().and_then(|d| {
+            let (dpi, dpi_y) = d.dpi().ok()?;
             Some(ViperStatus {
                 name: d.model.name,
-                dpi: d.dpi().ok()?.0,
+                dpi,
+                dpi_y,
+                stages: d.dpi_stages().ok(),
                 polling_hz: d.polling_rate().ok()?,
                 brightness: d.logo_brightness().ok()?,
             })
@@ -586,6 +639,11 @@ eq = "flat"
 power_saving_minutes = 15
 "#;
         let c: Config = toml::from_str(src).unwrap();
+        let st: Config = toml::from_str("[viper]
+dpi_stages = [400, [1600, 1200]]
+dpi_stage = 2").unwrap();
+        assert_eq!(st.viper.stages().unwrap().stages, vec![(400, 400), (1600, 1200)]);
+        assert_eq!(st.viper.stages().unwrap().active, 2);
         assert_eq!(c.viper.dpi, Some(1800));
         assert_eq!(c.viper.logo.as_ref().unwrap().effect().unwrap(), Effect::Static([0xff, 0, 0]));
         assert_eq!(c.earbuds.noise_control, Some(NoiseControl::Ambient));

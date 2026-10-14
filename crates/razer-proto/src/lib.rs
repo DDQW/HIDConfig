@@ -184,6 +184,47 @@ pub mod mouse {
         )
     }
 
+    pub const MAX_DPI_STAGES: usize = 5;
+
+    /// DPI stages cycled by the button under the mouse. `active` is 1-based.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct DpiStages {
+        pub active: u8,
+        /// `(x, y)` per stage.
+        pub stages: Vec<(u16, u16)>,
+    }
+
+    pub fn get_dpi_stages(txn: u8) -> Report {
+        Report::new(txn, 0x04, 0x86, 0x26).with_args(&[VARSTORE])
+    }
+
+    /// Layout (as the Viper reports it): `varstore, active, count`, then per stage
+    /// `number (1-based), x hi, x lo, y hi, y lo, 0, 0`.
+    pub fn set_dpi_stages(txn: u8, s: &DpiStages) -> Option<Report> {
+        let n = s.stages.len();
+        if n == 0 || n > MAX_DPI_STAGES || s.active == 0 || s.active as usize > n {
+            return None;
+        }
+        let mut args = vec![VARSTORE, s.active, n as u8];
+        for (i, &(x, y)) in s.stages.iter().enumerate() {
+            let [xh, xl] = x.to_be_bytes();
+            let [yh, yl] = y.to_be_bytes();
+            args.extend_from_slice(&[i as u8 + 1, xh, xl, yh, yl, 0, 0]);
+        }
+        Some(Report::new(txn, 0x04, 0x06, 0x26).with_args(&args))
+    }
+
+    pub fn parse_dpi_stages(r: &Report) -> Option<DpiStages> {
+        let n = (r.args[2] as usize).min(MAX_DPI_STAGES);
+        let stages = (0..n)
+            .map(|i| {
+                let e = &r.args[3 + i * 7..3 + i * 7 + 7];
+                (u16::from_be_bytes([e[1], e[2]]), u16::from_be_bytes([e[3], e[4]]))
+            })
+            .collect::<Vec<_>>();
+        (n > 0).then_some(DpiStages { active: r.args[1], stages })
+    }
+
     pub fn get_polling_rate(txn: u8) -> Report {
         Report::new(txn, 0x00, 0x85, 0x01)
     }
@@ -504,6 +545,24 @@ mod tests {
     fn set_dpi_bytes() {
         let b = mouse::set_dpi(0x1f, 1600, 800).to_bytes();
         assert_eq!(&b[5..15], &[0x07, 0x04, 0x05, 0x01, 0x06, 0x40, 0x03, 0x20, 0, 0]);
+    }
+
+    /// Reply captured from the Viper: re-encoding it must give the same argument bytes.
+    #[test]
+    fn dpi_stages_roundtrip() {
+        let raw = [
+            0x01, 0x03, 0x05, 0x01, 0x01, 0x90, 0x01, 0x90, 0x00, 0x00, 0x02, 0x03, 0x20, 0x03,
+            0x20, 0x00, 0x00, 0x03, 0x07, 0x08, 0x07, 0x08, 0x00, 0x00, 0x04, 0x09, 0x60, 0x09,
+            0x60, 0x00, 0x00, 0x05, 0x0c, 0x80, 0x0c, 0x80, 0x00, 0x00,
+        ];
+        let reply = Report::new(0x1f, 0x04, 0x86, 0x26).with_args(&raw);
+        let s = mouse::parse_dpi_stages(&reply).unwrap();
+        assert_eq!(s.active, 3);
+        assert_eq!(s.stages, vec![(400, 400), (800, 800), (1800, 1800), (2400, 2400), (3200, 3200)]);
+        let set = mouse::set_dpi_stages(0x1f, &s).unwrap();
+        assert_eq!((set.command_id, set.data_size), (0x06, 0x26));
+        assert_eq!(&set.args[..raw.len()], &raw);
+        assert!(mouse::set_dpi_stages(0x1f, &mouse::DpiStages { active: 6, stages: s.stages }).is_none());
     }
 
     #[test]

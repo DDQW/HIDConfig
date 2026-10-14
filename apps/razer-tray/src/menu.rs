@@ -1,7 +1,7 @@
 //! Tray context menu: built once, then re-checked from each snapshot.
 
 use anyhow::Result;
-use razer_settings::{Config, Eq, EarbudsCfg, Logo, LogoEffect, NoiseControl};
+use razer_settings::{Config, EarbudsCfg, Eq, Logo, LogoEffect, NoiseControl, StageDpi};
 use tray_icon::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
 use crate::worker::Snapshot;
@@ -114,6 +114,7 @@ pub struct TrayMenu {
     viper_header: MenuItem,
     viper_subs: Vec<Submenu>,
     dpi: Vec<(u16, CheckMenuItem)>,
+    stages: Vec<CheckMenuItem>,
     poll: Vec<(u16, CheckMenuItem)>,
     logo: Vec<(LogoEffect, CheckMenuItem)>,
     colors: Vec<(&'static str, CheckMenuItem)>,
@@ -142,6 +143,9 @@ impl TrayMenu {
         let viper_header = MenuItem::new("Razer Viper", false, None);
         let dpi: Vec<_> =
             DPI_PRESETS.iter().map(|&d| (d, check(format!("dpi:{d}"), &d.to_string()))).collect();
+        let stages: Vec<_> = (1..=razer_proto::mouse::MAX_DPI_STAGES)
+            .map(|n| check(format!("stage:{n}"), &format!("Stage {n}")))
+            .collect();
         let poll: Vec<_> =
             POLL_RATES.iter().map(|&h| (h, check(format!("poll:{h}"), &format!("{h} Hz")))).collect();
         let logo: Vec<_> = LOGO_EFFECTS
@@ -155,6 +159,7 @@ impl TrayMenu {
 
         let viper_subs = vec![
             submenu("DPI", &dpi.iter().map(|(_, i)| i).collect::<Vec<_>>())?,
+            submenu("DPI stage", &stages.iter().collect::<Vec<_>>())?,
             submenu("Polling rate", &poll.iter().map(|(_, i)| i).collect::<Vec<_>>())?,
             submenu("Logo effect", &logo.iter().map(|(_, i)| i).collect::<Vec<_>>())?,
             submenu("Logo colour", &colors.iter().map(|(_, i)| i).collect::<Vec<_>>())?,
@@ -211,6 +216,7 @@ impl TrayMenu {
             viper_header,
             viper_subs,
             dpi,
+            stages,
             poll,
             logo,
             colors,
@@ -231,10 +237,38 @@ impl TrayMenu {
     pub fn update(&self, s: &Snapshot, autostart: bool) {
         let v = &s.status.viper;
         let cv = &s.config.viper;
+        let st = v.as_ref().and_then(|v| v.stages.clone()).or_else(|| cv.stages());
         self.viper_header.set_text(match v {
-            Some(v) => format!("{} · {} DPI · {} Hz", v.name, v.dpi, v.polling_hz),
+            Some(v) => {
+                let dpi = if v.dpi == v.dpi_y {
+                    v.dpi.to_string()
+                } else {
+                    format!("{}×{}", v.dpi, v.dpi_y)
+                };
+                // Name the stage only when the live DPI is that stage's value.
+                let stage = st.as_ref().and_then(|st| {
+                    let &(x, y) = st.stages.get((st.active as usize).checked_sub(1)?)?;
+                    (x == v.dpi && y == v.dpi_y).then(|| format!(" (stage {})", st.active))
+                });
+                format!("{} · {dpi} DPI{} · {} Hz", v.name, stage.unwrap_or_default(), v.polling_hz)
+            }
             None => "Razer Viper (not connected)".into(),
         });
+        for (i, item) in self.stages.iter().enumerate() {
+            match st.as_ref().and_then(|st| st.stages.get(i).map(|&s| (st.active, s))) {
+                Some((active, (x, y))) => {
+                    let dpi = if x == y { x.to_string() } else { format!("{x}×{y}") };
+                    item.set_text(format!("Stage {}: {dpi}", i + 1));
+                    item.set_enabled(true);
+                    item.set_checked(active as usize == i + 1);
+                }
+                None => {
+                    item.set_text(format!("Stage {} (unused)", i + 1));
+                    item.set_enabled(false);
+                    item.set_checked(false);
+                }
+            }
+        }
         for sub in &self.viper_subs {
             sub.set_enabled(v.is_some());
         }
@@ -294,13 +328,31 @@ impl TrayMenu {
 
     /// Turns a clicked item id into an action. Check items have already toggled
     /// themselves, so their state is the requested one.
-    pub fn action(&self, id: &str) -> Option<Action> {
+    /// `stages`: what the device last reported, for when the config has none.
+    pub fn action(&self, id: &str, stages: Option<razer_proto::mouse::DpiStages>) -> Option<Action> {
         let (kind, arg) = id.split_once(':').unwrap_or((id, ""));
         let edit = |f: Box<dyn FnOnce(&mut Config) + Send>| Some(Action::Edit(f));
         match kind {
             "dpi" => {
                 let d: u16 = arg.parse().ok()?;
-                edit(Box::new(move |c| c.viper.dpi = Some(d)))
+                edit(Box::new(move |c| {
+                    c.viper.dpi = Some(d);
+                    c.viper.dpi_y = None;
+                }))
+            }
+            "stage" => {
+                let n: u8 = arg.parse().ok()?;
+                // Use the stages the device reports if the config has none yet.
+                edit(Box::new(move |c| {
+                    let st = c.viper.dpi_stages.clone().or_else(|| {
+                        stages.map(|s| s.stages.iter().map(|&x| StageDpi::from_xy(x)).collect())
+                    });
+                    if let Some(st) = st
+                        && (n as usize) <= st.len()
+                    {
+                        crate::set_stages(c, st, n);
+                    }
+                }))
             }
             "poll" => {
                 let h: u16 = arg.parse().ok()?;

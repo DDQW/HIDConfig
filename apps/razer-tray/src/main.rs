@@ -10,7 +10,8 @@ mod worker;
 use std::{cell::RefCell, sync::mpsc::Sender};
 
 use anyhow::Result;
-use razer_settings::{Eq, LogoEffect, NoiseControl, parse_rgb};
+use razer_settings::{Eq, LogoEffect, NoiseControl, StageDpi, parse_rgb};
+use slint::Model;
 use slint::ComponentHandle;
 use tray_icon::{
     MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent, menu::MenuEvent,
@@ -108,6 +109,14 @@ fn run() -> Result<()> {
     Ok(())
 }
 
+/// Stages become the source of the live DPI: the active stage's value applies.
+pub fn set_stages(c: &mut razer_settings::Config, stages: Vec<StageDpi>, active: u8) {
+    c.viper.dpi_stages = Some(stages);
+    c.viper.dpi_stage = Some(active);
+    c.viper.dpi = None;
+    c.viper.dpi_y = None;
+}
+
 /// Sends a config edit to the worker.
 fn edit(tx: &Sender<Cmd>, f: impl FnOnce(&mut razer_settings::Config) + Send + 'static) {
     let _ = tx.send(Cmd::Edit(Box::new(f)));
@@ -115,9 +124,48 @@ fn edit(tx: &Sender<Cmd>, f: impl FnOnce(&mut razer_settings::Config) + Send + '
 
 fn wire_ui(ui: &SettingsWindow, tx: &Sender<Cmd>) {
     let t = tx.clone();
-    ui.on_dpi_changed(move |v| {
-        let d = v.clamp(100, 16000) as u16;
-        edit(&t, move |c| c.viper.dpi = Some(d));
+    ui.on_dpi_changed(move |x, y| {
+        let x = x.clamp(100, 16000) as u16;
+        let y = y.clamp(100, 16000) as u16;
+        edit(&t, move |c| {
+            c.viper.dpi = Some(x);
+            c.viper.dpi_y = (y != x).then_some(y);
+        });
+    });
+    let weak = ui.as_weak();
+    ui.on_stage_count_changed(move |n| {
+        let Some(ui) = weak.upgrade() else { return };
+        let mut stages: Vec<StageValue> = ui.get_stages().iter().collect();
+        let n = n.clamp(1, 5) as usize;
+        while stages.len() < n {
+            let last = stages.last().cloned().unwrap_or(StageValue { x: 400, y: 400 });
+            let next = |v: i32| (v * 2).min(16000);
+            stages.push(StageValue { x: next(last.x), y: next(last.y) });
+        }
+        stages.truncate(n);
+        ui.set_stages(slint::ModelRc::new(slint::VecModel::from(stages)));
+        if ui.get_active_stage() as usize > n {
+            ui.set_active_stage(n as i32);
+        }
+        ui.set_stages_dirty(true);
+    });
+    let weak = ui.as_weak();
+    let t = tx.clone();
+    ui.on_stages_apply(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        let xy = ui.get_xy_separate();
+        let stages: Vec<StageDpi> = ui
+            .get_stages()
+            .iter()
+            .map(|s| {
+                let x = s.x.clamp(100, 16000) as u16;
+                let y = if xy { s.y.clamp(100, 16000) as u16 } else { x };
+                StageDpi::from_xy((x, y))
+            })
+            .collect();
+        let active = ui.get_active_stage().clamp(1, stages.len() as i32) as u8;
+        ui.set_stages_dirty(false);
+        edit(&t, move |c| set_stages(c, stages, active));
     });
     let t = tx.clone();
     ui.on_polling_changed(move |i| {
@@ -189,7 +237,8 @@ impl App {
     }
 
     fn on_menu(&mut self, id: &str) {
-        match self.menu.action(id) {
+        let stages = self.snapshot.as_ref().and_then(|s| s.status.viper.as_ref()?.stages.clone());
+        match self.menu.action(id, stages) {
             Some(Action::Edit(f)) => {
                 let _ = self.tx.send(Cmd::Edit(f));
             }
@@ -283,6 +332,30 @@ fn update_ui(ui: &SettingsWindow, s: &Snapshot, autostart: bool) {
     }
     if let Some(d) = v.map(|v| v.dpi).or(cv.dpi) {
         ui.set_dpi(d as i32);
+    }
+    if let Some(d) = v.map(|v| v.dpi_y).or(cv.dpi_y).or(cv.dpi) {
+        ui.set_dpi_y(d as i32);
+    }
+    // Keep stage edits in progress.
+    if !ui.get_stages_dirty() {
+        let st = v.and_then(|v| v.stages.clone()).or_else(|| cv.stages());
+        if let Some(st) = st {
+            let differ = st.stages.iter().any(|&(x, y)| x != y);
+            let model: Vec<StageValue> =
+                st.stages.iter().map(|&(x, y)| StageValue { x: x as i32, y: y as i32 }).collect();
+            let current: Vec<StageValue> = ui.get_stages().iter().collect();
+            if current != model {
+                ui.set_stages(slint::ModelRc::new(slint::VecModel::from(model)));
+            }
+            ui.set_active_stage(st.active as i32);
+            ui.set_stage_count_index(st.stages.len() as i32 - 1);
+            if differ {
+                ui.set_xy_separate(true);
+            }
+        }
+    }
+    if v.is_some_and(|v| v.dpi != v.dpi_y) {
+        ui.set_xy_separate(true);
     }
     if let Some(hz) = v.map(|v| v.polling_hz).or(cv.polling_hz) {
         ui.set_polling_index(POLL_RATES.iter().position(|&h| h == hz).map_or(-1, |i| i as i32));

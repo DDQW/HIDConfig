@@ -18,6 +18,7 @@ pub enum Feature {
     PollingRate,
     LogoEffect,
     LogoBrightness,
+    DpiStages,
 }
 
 /// Static per-model knowledge (OpenRazer's `razermouse_driver.c` switch tables).
@@ -38,7 +39,13 @@ pub static MODELS: &[Model] = &[Model {
     control_interface: 0,
     transaction_id: 0x1f,
     max_dpi: 16000,
-    features: &[Feature::Dpi, Feature::PollingRate, Feature::LogoEffect, Feature::LogoBrightness],
+    features: &[
+        Feature::Dpi,
+        Feature::DpiStages,
+        Feature::PollingRate,
+        Feature::LogoEffect,
+        Feature::LogoBrightness,
+    ],
 }];
 
 pub fn model(pid: u16) -> Option<&'static Model> {
@@ -148,6 +155,22 @@ impl Device {
 
     pub fn set_logo_effect(&self, effect: Effect) -> Result<()> {
         self.transact(&razer_proto::extended::set_effect(self.txn(), led::LOGO, effect))?;
+        Ok(())
+    }
+
+    pub fn dpi_stages(&self) -> Result<mouse::DpiStages> {
+        let r = self.transact(&mouse::get_dpi_stages(self.txn()))?;
+        mouse::parse_dpi_stages(&r).context("device reported no DPI stages")
+    }
+
+    pub fn set_dpi_stages(&self, s: &mouse::DpiStages) -> Result<()> {
+        let max = self.model.max_dpi;
+        if s.stages.iter().any(|&(x, y)| !(100..=max).contains(&x) || !(100..=max).contains(&y)) {
+            bail!("stage DPI must be 100..={max}");
+        }
+        let req = mouse::set_dpi_stages(self.txn(), s)
+            .with_context(|| format!("need 1..={} stages and a valid active stage", mouse::MAX_DPI_STAGES))?;
+        self.transact(&req)?;
         Ok(())
     }
 

@@ -30,6 +30,11 @@ component Swatch inherits Rectangle {
     }
 }
 
+export struct StageValue {
+    x: int,
+    y: int,
+}
+
 export component SettingsWindow inherits Window {
     title: "openrazer-win";
     preferred-width: 480px;
@@ -41,12 +46,21 @@ export component SettingsWindow inherits Window {
     in property <string> viper-name: "Razer Viper";
     in property <int> max-dpi: 16000;
     in-out property <int> dpi: 800;
+    in-out property <int> dpi-y: 800;
+    in-out property <bool> xy-separate;
+    in-out property <[StageValue]> stages;
+    in-out property <int> active-stage: 1;      // 1-based
+    in-out property <int> stage-count-index;    // stages.length - 1
+    // Set while the user edits stages; Rust stops overwriting them until applied.
+    in-out property <bool> stages-dirty;
     in-out property <int> polling-index;        // 0 = 125, 1 = 500, 2 = 1000 Hz
     in-out property <int> brightness: 128;      // 0..255
     in-out property <int> logo-effect-index;    // off, static, breathing, spectrum
     in-out property <string> logo-color: "44d62c";
 
-    callback dpi-changed(int);
+    callback dpi-changed(int, int);
+    callback stage-count-changed(int);
+    callback stages-apply();
     callback polling-changed(int);
     callback brightness-changed(int);
     callback logo-changed(int, string);
@@ -102,7 +116,7 @@ export component SettingsWindow inherits Window {
                 VerticalLayout {
                     spacing: 10px;
                     Row {
-                        label: "DPI";
+                        label: root.xy-separate ? "DPI X (live)" : "DPI (live)";
                         dpi-slider := Slider {
                             minimum: 100;
                             maximum: root.max-dpi;
@@ -110,7 +124,7 @@ export component SettingsWindow inherits Window {
                             step: 50;
                             released(v) => {
                                 root.dpi = round(v / 50) * 50;
-                                root.dpi-changed(root.dpi);
+                                root.dpi-changed(root.dpi, root.xy-separate ? root.dpi-y : root.dpi);
                             }
                         }
                         dpi-spin := SpinBox {
@@ -121,8 +135,85 @@ export component SettingsWindow inherits Window {
                             value: root.dpi;
                             edited(v) => {
                                 root.dpi = v;
-                                root.dpi-changed(v);
+                                root.dpi-changed(v, root.xy-separate ? root.dpi-y : v);
                             }
+                        }
+                    }
+                    if root.xy-separate: Row {
+                        label: "DPI Y (live)";
+                        dpi-y-slider := Slider {
+                            minimum: 100;
+                            maximum: root.max-dpi;
+                            value: root.dpi-y;
+                            step: 50;
+                            released(v) => {
+                                root.dpi-y = round(v / 50) * 50;
+                                root.dpi-changed(root.dpi, root.dpi-y);
+                            }
+                        }
+                        SpinBox {
+                            width: 100px;
+                            minimum: 100;
+                            maximum: root.max-dpi;
+                            step-size: 50;
+                            value: root.dpi-y;
+                            edited(v) => {
+                                root.dpi-y = v;
+                                root.dpi-changed(root.dpi, v);
+                            }
+                        }
+                    }
+                    Row {
+                        label: "Separate X / Y";
+                        Switch { checked <=> root.xy-separate; }
+                    }
+                    Row {
+                        label: "DPI stages";
+                        ComboBox {
+                            model: ["1", "2", "3", "4", "5"];
+                            current-index <=> root.stage-count-index;
+                            selected => { root.stage-count-changed(self.current-index + 1); }
+                        }
+                    }
+                    for st[i] in root.stages: Row {
+                        label: (i + 1 == root.active-stage ? "● " : "○ ") + "Stage " + (i + 1);
+                        SpinBox {
+                            width: 100px;
+                            minimum: 100;
+                            maximum: root.max-dpi;
+                            step-size: 50;
+                            value: st.x;
+                            edited(v) => {
+                                root.stages[i] = { x: v, y: root.xy-separate ? st.y : v };
+                                root.stages-dirty = true;
+                            }
+                        }
+                        if root.xy-separate: SpinBox {
+                            width: 100px;
+                            minimum: 100;
+                            maximum: root.max-dpi;
+                            step-size: 50;
+                            value: st.y;
+                            edited(v) => {
+                                root.stages[i] = { x: st.x, y: v };
+                                root.stages-dirty = true;
+                            }
+                        }
+                        Button {
+                            text: i + 1 == root.active-stage ? "Active" : "Use";
+                            enabled: i + 1 != root.active-stage;
+                            clicked => {
+                                root.active-stage = i + 1;
+                                root.stages-dirty = true;
+                            }
+                        }
+                    }
+                    Row {
+                        label: "";
+                        Button {
+                            text: root.stages-dirty ? "Apply stages" : "Stages saved";
+                            enabled: root.stages-dirty;
+                            clicked => { root.stages-apply(); }
                         }
                     }
                     Row {
