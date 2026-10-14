@@ -6,7 +6,7 @@ use tray_icon::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuI
 
 use crate::worker::Snapshot;
 
-pub const DPI_PRESETS: &[u16] = &[400, 800, 1200, 1600, 1800, 2400, 3200, 4000, 6400];
+pub const DPI_PRESETS: &[u16] = &[400, 800, 1200, 1600, 1800, 2400, 3200, 4000, 6400, 8000, 12000, 16000];
 pub const POLL_RATES: &[u16] = &[125, 500, 1000];
 pub const LOGO_EFFECTS: &[(LogoEffect, &str)] = &[
     (LogoEffect::Off, "Off"),
