@@ -156,6 +156,38 @@ component DpiSpin inherits SpinBox {
     changed source => { self.value = self.source; }
 }
 
+// Parses user-typed numbers (accepts "1,5" and "1.5"); Rust implements it.
+export global Num {
+    pure callback parse(string) -> float;
+}
+
+component NumEdit inherits LineEdit {
+    in property <float> value;
+    in property <float> minimum: 0;
+    in property <float> maximum: 100;
+    in property <int> decimals: 0;
+    in property <string> unit;
+    callback commit(float);
+    width: unit == "" ? 64px : 84px;
+    horizontal-alignment: right;
+    property <float> source: value;
+    function show(v: float) -> string {
+        return (decimals > 0 ? round(v * 100) / 100 : round(v)) + (unit == "" ? "" : " " + unit);
+    }
+    changed source => { self.text = show(self.source); }
+    init => { self.text = show(self.value); }
+    accepted(t) => {
+        let v = Num.parse(t);
+        if (v > -999999) {
+            let c = max(root.minimum, min(root.maximum, v));
+            root.commit(decimals > 0 ? round(c * 100) / 100 : round(c));
+            self.text = show(c);
+        } else {
+            self.text = show(self.value);
+        }
+    }
+}
+
 component Placeholder inherits Text {
     color: Theme.muted;
     wrap: word-wrap;
@@ -425,11 +457,13 @@ component ViperCard inherits VerticalLayout {
                         AppState.brightness-changed(AppState.brightness);
                     }
                 }
-                Text {
-                    width: 44px;
-                    text: round(AppState.brightness * 100 / 255) + "%";
-                    vertical-alignment: center;
-                    horizontal-alignment: right;
+                NumEdit {
+                    value: AppState.brightness * 100 / 255;
+                    unit: "%";
+                    commit(v) => {
+                        AppState.brightness = round(v * 255 / 100);
+                        AppState.brightness-changed(AppState.brightness);
+                    }
                 }
             }
         }
@@ -678,6 +712,12 @@ component MouseCoreCard inherits Card {
             value: WinState.pointer-speed;
             released(v) => { WinState.set("mouse.pointer_speed", round(v)); }
         }
+        NumEdit {
+            value: WinState.pointer-speed;
+            minimum: 1;
+            maximum: 20;
+            commit(v) => { WinState.set("mouse.pointer_speed", v); }
+        }
         Text {
             width: 64px;
             text: "×" + WinState.speed-multipliers[WinState.pointer-speed - 1];
@@ -887,6 +927,12 @@ component KeyboardCard inherits Card {
             step: 1;
             value: WinState.repeat-rate;
             released(v) => { WinState.set("keyboard.repeat_rate", round(v)); }
+        }
+        NumEdit {
+            value: WinState.repeat-rate;
+            minimum: 0;
+            maximum: 31;
+            commit(v) => { WinState.set("keyboard.repeat_rate", v); }
         }
         Text {
             width: 64px;
@@ -1098,11 +1144,10 @@ component VolumeRow inherits HorizontalLayout {
         value: root.volume;
         changed(v) => { root.set-volume(v); }
     }
-    Text {
-        width: 40px;
-        text: round(root.volume) + "%";
-        horizontal-alignment: right;
-        vertical-alignment: center;
+    NumEdit {
+        value: root.volume;
+        unit: "%";
+        commit(v) => { root.set-volume(v); }
     }
 }
 
@@ -1614,11 +1659,10 @@ component VcpSlider inherits WideRow {
         value: root.value;
         released(v) => { DisplayState.vcp(root.device, root.code, round(v)); }
     }
-    Text {
-        width: 44px;
-        text: root.value;
-        horizontal-alignment: right;
-        vertical-alignment: center;
+    NumEdit {
+        value: root.value;
+        maximum: root.maximum;
+        commit(v) => { DisplayState.vcp(root.device, root.code, v); }
     }
 }
 
@@ -1693,7 +1737,13 @@ component DisplayCard inherits Card {
             value: root.d.sdr-nits;
             released(v) => { GfxState.sdr(root.d.device, round(v)); }
         }
-        Text { width: 64px; text: root.d.sdr-nits + " nits"; horizontal-alignment: right; vertical-alignment: center; }
+        NumEdit {
+            value: root.d.sdr-nits;
+            minimum: 80;
+            maximum: 480;
+            unit: "nits";
+            commit(v) => { GfxState.sdr(root.d.device, v); }
+        }
     }
     if root.d.hdr-supported: Row {
         label: "HDR";
@@ -1834,11 +1884,12 @@ component DisplayCard inherits Card {
             value: root.d.kelvin;
             released(v) => { DisplayState.kelvin(root.d.device, round(v)); }
         }
-        Text {
-            width: 64px;
-            text: root.d.kelvin + " K";
-            horizontal-alignment: right;
-            vertical-alignment: center;
+        NumEdit {
+            value: root.d.kelvin;
+            minimum: root.d.kelvin-min;
+            maximum: root.d.kelvin-max;
+            unit: "K";
+            commit(v) => { DisplayState.kelvin(root.d.device, v); }
         }
     }
     if root.d.ddc && root.open && root.d.languages.length > 0: Row {
@@ -2115,7 +2166,13 @@ component GraphicsCard inherits Card {
             value: GfxState.warm-kelvin;
             released(v) => { WinState.set("graphics.warm_filter_kelvin", round(v / 100) * 100); }
         }
-        Text { width: 64px; text: GfxState.warm-kelvin + " K"; horizontal-alignment: right; vertical-alignment: center; }
+        NumEdit {
+            value: GfxState.warm-kelvin;
+            minimum: 1900;
+            maximum: 6500;
+            unit: "K";
+            commit(v) => { WinState.set("graphics.warm_filter_kelvin", v); }
+        }
     }
     WideRow {
         label: "Gamma (software)";
@@ -2128,7 +2185,13 @@ component GraphicsCard inherits Card {
             value: GfxState.gamma;
             released(v) => { WinState.set("graphics.gamma", round(v * 20) / 20); }
         }
-        Text { width: 64px; text: round(GfxState.gamma * 100) / 100; horizontal-alignment: right; vertical-alignment: center; }
+        NumEdit {
+            value: GfxState.gamma;
+            minimum: 0.3;
+            maximum: 3.0;
+            decimals: 2;
+            commit(v) => { WinState.set("graphics.gamma", v); }
+        }
     }
     Placeholder {
         text: "1.0 = unchanged. Use the monitor's own gamma setting first; this adjusts on top of it.";

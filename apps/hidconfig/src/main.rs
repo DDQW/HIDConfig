@@ -99,6 +99,16 @@ fn run() -> Result<()> {
     wire_pads(&ui);
     wire_display(&ui, &tx);
     wire_graphics(&ui, &tx);
+    // Number fields: accept both decimal separators; -1 000 000 means "not a number".
+    ui.global::<Num>().on_parse(|t| {
+        let t: String = t
+            .trim()
+            .replace(',', ".")
+            .chars()
+            .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+            .collect();
+        t.parse::<f32>().unwrap_or(-1_000_000.0)
+    });
 
     MenuEvent::set_event_handler(Some(|ev: MenuEvent| {
         let id = ev.id.0;
@@ -937,10 +947,10 @@ fn wire_graphics(ui: &SettingsWindow, tx: &Sender<Cmd>) {
     gs.on_web_search(|dev| {
         if let Some((vendor, model)) = with_display(&dev, |x| {
             Some((icc::vendor_name(&x.vendor).to_string(), x.name.clone()))
-        })
-            && let Err(e) = icc::web_search(&vendor, &model) {
-                log(&format!("web search: {e:#}"));
-            }
+        }) && let Err(e) = icc::web_search(&vendor, &model)
+        {
+            log(&format!("web search: {e:#}"));
+        }
     });
     let w = ui.as_weak();
     gs.on_find_online(move |dev| {
