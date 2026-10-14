@@ -517,11 +517,12 @@ pub fn set_warm_filter(kelvin: u32) -> Result<()> {
 /// is raised, which limits how far this can go.
 pub fn set_color_ramp(kelvin: u32, gamma: f64) -> Result<()> {
     let gamma = gamma.clamp(0.3, 3.0);
-    let (r, g, b) = kelvin_to_rgb(kelvin.clamp(1900, 6500));
+    // "Off" must be an exact identity ramp, not the approximation at 6500 K.
+    let (r, g, b) = if kelvin >= 6500 { (1.0, 1.0, 1.0) } else { kelvin_to_rgb(kelvin.max(1900)) };
     let mut ramp = [[0u16; 256]; 3];
     for (channel, mult) in ramp.iter_mut().zip([r, g, b]) {
         for (i, v) in channel.iter_mut().enumerate() {
-            *v = ((i as f64 / 255.0).powf(1.0 / gamma) * 65535.0 * mult) as u16;
+            *v = ((i as f64 / 255.0).powf(1.0 / gamma) * 65535.0 * mult).round() as u16;
         }
     }
     let mut failed = Vec::new();
