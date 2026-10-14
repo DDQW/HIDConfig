@@ -757,6 +757,13 @@ impl Watcher {
         self.status.earbuds = earbuds;
         self.status.windows = hidconfig_win::read().ok();
         self.status.adapter = hidconfig_win::gamepad::adapter();
+        // Gamma ramps are reset by mode changes, HDR toggles and some games.
+        if let Some(k) = self.config.windows.graphics.warm_filter_kelvin
+            && k < 6500
+            && hidconfig_win::graphics::warm_filter().abs_diff(k) > 150
+        {
+            let _ = hidconfig_win::graphics::set_warm_filter(k);
+        }
         self.refresh_displays();
     }
 }

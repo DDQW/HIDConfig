@@ -7,6 +7,7 @@ pub mod audio;
 mod devices;
 pub mod display;
 pub mod gamepad;
+pub mod graphics;
 pub mod keyboard;
 pub mod mouse;
 mod reg;
@@ -28,6 +29,7 @@ pub struct WindowsSettings {
     pub keyboard: KeyboardSettings,
     pub audio: AudioSettings,
     pub gaming: gamepad::GamingSettings,
+    pub graphics: graphics::GraphicsSettings,
 }
 
 impl WindowsSettings {
@@ -75,6 +77,7 @@ impl WindowsSettings {
 pub fn read() -> Result<WindowsSettings> {
     Ok(WindowsSettings {
         gaming: gamepad::read()?,
+        graphics: graphics::read()?,
         mouse: mouse::read()?,
         keyboard: keyboard::read()?,
         audio: audio::read()?,
@@ -100,6 +103,9 @@ pub fn apply(s: &WindowsSettings, backup: &Path) -> Result<()> {
     }
     if let Err(e) = gamepad::apply(&s.gaming) {
         errors.push(format!("gaming: {e:#}"));
+    }
+    if let Err(e) = graphics::apply(&s.graphics) {
+        errors.push(format!("graphics: {e:#}"));
     }
     if errors.is_empty() {
         Ok(())
@@ -128,6 +134,9 @@ fn update_backup(path: &Path, s: &WindowsSettings) -> Result<()> {
     if saved.gaming == Default::default() && s.gaming != Default::default() {
         saved.gaming = gamepad::read()?;
     }
+    if saved.graphics == Default::default() && s.graphics != Default::default() {
+        saved.graphics = graphics::read()?;
+    }
     if saved == before && path.exists() {
         return Ok(());
     }
@@ -152,6 +161,7 @@ pub fn restore(backup: &Path) -> Result<WindowsSettings> {
     keyboard::apply(&saved.keyboard)?;
     audio::apply(&saved.audio)?;
     gamepad::apply(&saved.gaming)?;
+    graphics::apply(&saved.graphics)?;
     Ok(saved)
 }
 

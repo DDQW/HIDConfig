@@ -34,6 +34,8 @@ pub struct Display {
     pub device: String,
     /// Monitor name from EDID, e.g. "PL4373UH".
     pub name: String,
+    /// Monitor device key (registry path), used for colour profiles.
+    pub monitor_key: Option<String>,
     pub primary: bool,
     pub mode: Mode,
     /// 0, 90, 180, 270.
@@ -42,6 +44,8 @@ pub struct Display {
     pub modes: Vec<Mode>,
     pub hdr_supported: bool,
     pub hdr_on: bool,
+    /// Bit depth, colour encoding and SDR content brightness of the link.
+    pub hdr_info: Option<crate::graphics::HdrInfo>,
     /// Current scaling in percent and the choices Windows allows.
     pub scale: Option<u32>,
     pub scales: Vec<u32>,
@@ -85,6 +89,19 @@ fn monitor_device(h: HMONITOR) -> Option<(String, bool)> {
                 info.monitorInfo.dwFlags & 1 != 0, /* MONITORINFOF_PRIMARY */
             )
         })
+}
+
+fn monitor_key(device: &str) -> Option<String> {
+    let name = wide(device);
+    let mut dd = DISPLAY_DEVICEW {
+        cb: size_of::<DISPLAY_DEVICEW>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: cb set; first monitor attached to this adapter output.
+    unsafe { EnumDisplayDevicesW(PCWSTR(name.as_ptr()), 0, &mut dd, 0) }
+        .as_bool()
+        .then(|| from_wide(&dd.DeviceKey))
+        .filter(|k| !k.is_empty())
 }
 
 fn devmode() -> DEVMODEW {
@@ -361,6 +378,12 @@ fn path_for(device: &str) -> Result<Path> {
 
 pub fn set_hdr(device: &str, on: bool) -> Result<()> {
     set_hdr_on(&path_for(device)?, on)
+}
+
+/// SDR content brightness while HDR is on (80-480 nits).
+pub fn set_sdr_brightness(device: &str, nits: u32) -> Result<()> {
+    let p = path_for(device)?;
+    crate::graphics::set_sdr_nits(p.target.adapterId, p.target.id, nits)
 }
 
 pub fn set_scale(device: &str, percent: u32) -> Result<()> {
@@ -938,6 +961,7 @@ pub fn displays(with_ddc: bool) -> Result<Vec<Display>> {
             None
         };
         out.push(Display {
+            monitor_key: monitor_key(&device),
             modes: modes(&device),
             device,
             name,
@@ -946,6 +970,7 @@ pub fn displays(with_ddc: bool) -> Result<Vec<Display>> {
             rotation,
             hdr_supported,
             hdr_on,
+            hdr_info: path.and_then(|p| crate::graphics::hdr_info(p.target.adapterId, p.target.id)),
             scale,
             scales,
             ddc,

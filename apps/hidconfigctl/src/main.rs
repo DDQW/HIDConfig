@@ -326,6 +326,17 @@ enum DisplayCmd {
     Hdr { display: String, state: OnOff },
     /// Scaling in percent (100, 125, 150 ...).
     Scale { display: String, percent: u32 },
+    /// Colour profiles of a display; with PROFILE, make it this user's default ("system" = undo).
+    Profile {
+        display: String,
+        profile: Option<String>,
+    },
+    /// SDR content brightness while HDR is on (80-480 nits).
+    Sdr { display: String, nits: u32 },
+    /// Turn all displays off now.
+    Off,
+    /// Hardware-accelerated GPU scheduling (admin; restart needed).
+    GpuScheduling { state: OnOff },
     /// Read every DDC/CI control 00-FF of a monitor (read-only, ~15 s).
     Scan { display: String },
     /// Colour temperature in Kelvin.
@@ -377,6 +388,15 @@ fn display(cmd: &DisplayCmd) -> Result<()> {
                         "off".into()
                     }
                 );
+                if let Some(h) = &x.hdr_info {
+                    println!(
+                        "  signal:   {}-bit {}{}",
+                        h.bits_per_channel,
+                        h.encoding,
+                        h.sdr_nits
+                            .map_or(String::new(), |n| format!(", SDR content {n} nits"))
+                    );
+                }
                 println!(
                     "  scaling:  {}  options {:?}",
                     x.scale.map_or("?".into(), |s| format!("{s}%")),
@@ -429,6 +449,41 @@ fn display(cmd: &DisplayCmd) -> Result<()> {
         DisplayCmd::Scale { display, percent } => {
             d::set_scale(&display_device(display), *percent)?;
             println!("scaling {percent}%");
+        }
+        DisplayCmd::Profile { display, profile } => {
+            use hidconfig_win::graphics as g;
+            let dev = display_device(display);
+            let x = d::displays(false)?
+                .into_iter()
+                .find(|x| x.device == dev)
+                .context("no such display")?;
+            let key = x.monitor_key.context("no monitor device key")?;
+            if let Some(p) = profile {
+                g::set_color_profile(&key, (p != "system").then_some(p.as_str()))?;
+            }
+            let c = g::color_profiles(&key);
+            println!(
+                "default: {} ({})",
+                c.default.as_deref().unwrap_or("none"),
+                if c.per_user {
+                    "per user"
+                } else {
+                    "system-wide"
+                }
+            );
+            println!("installed: {}", c.installed.join(", "));
+        }
+        DisplayCmd::Sdr { display, nits } => {
+            d::set_sdr_brightness(&display_device(display), *nits)?;
+            println!("SDR content brightness {nits} nits");
+        }
+        DisplayCmd::Off => hidconfig_win::graphics::displays_off(),
+        DisplayCmd::GpuScheduling { state } => {
+            hidconfig_win::graphics::set_gpu_scheduling(state.on())?;
+            println!(
+                "GPU scheduling {} after restart",
+                if state.on() { "on" } else { "off" }
+            );
         }
         DisplayCmd::Scan { display } => {
             for v in d::scan(&display_device(display))? {
